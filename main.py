@@ -433,6 +433,7 @@ def load_existing_excel(path: str):
         return []
 
 
+
 def save_excel_with_formatting(path: str, data_list):
     """Сохраняет список словарей в Excel с форматированием"""
     if not data_list:
@@ -635,6 +636,56 @@ def get_interactive_urls():
     
     return urls
 
+def get_interactive_urls():
+    # Проверяем, запущены ли мы в интерактивном терминале
+    if not sys.stdin.isatty():
+        print("❌ Интерактивный режим недоступен в неинтерактивной среде")
+        print("💡 Используйте аргументы командной строки или файл с URL")
+        return []
+    
+    print("\n" + "="*70)
+    print("🛒 ROZETKA STOCK CHECKER - Інтерактивний режим")
+    print("="*70)
+    print("📝 Введіть URL товарів для перевірки залишків:")
+    print("   • Вводьте по одному URL в рядку")
+    print("   • Для завершення натисніть Enter на порожньому рядку")
+    print("   • Для виходу введіть 'exit' або 'quit'")
+    print("-"*70)
+    
+    urls = []
+    counter = 1
+    
+    while True:
+        try:
+            url = input(f"🔗 URL №{counter}: ").strip()
+            
+            if not url:
+                if urls:
+                    print(f"\n✅ Введено {len(urls)} URL(s). Починаємо перевірку...")
+                    break
+                else:
+                    print("❌ Не введено жодного URL. Спробуйте ще раз.")
+                    continue
+            
+            if url.lower() in ['exit', 'quit', 'вихід']:
+                print("👋 Вихід з програми...")
+                sys.exit(0)
+            
+            if url.startswith('http') and 'rozetka.com.ua' in url:
+                urls.append(url)
+                print(f"   ✓ URL №{counter} додано")
+                counter += 1
+            else:
+                print("   ❌ URL має починатися з http:// або https:// та містити rozetka.com.ua")
+                
+        except KeyboardInterrupt:
+            print("\n\n👋 Програма перервана користувачем")
+            sys.exit(0)
+        except EOFError:
+            print("\n❌ Помилка вводу. Завершення роботи.")
+            break
+    
+    return urls
 
 def parse_cli():
     p = argparse.ArgumentParser(description="Rozetka stock checker -> Excel таблиця")
