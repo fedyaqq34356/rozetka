@@ -11,11 +11,7 @@ except ImportError:
     print("[ПОМИЛКА] Потрібно встановити cloudscraper: pip install cloudscraper")
     raise
 
-try:
-    import pandas as pd
-except ImportError:
-    print("[ПОМИЛКА] Потрібно встановити pandas: pip install pandas")
-    raise
+
 
 try:
     import openpyxl
@@ -390,30 +386,64 @@ EXCEL_FIELDS = ["name", "url", "category", "last_checked", "max_stock"]
 
 
 def load_existing_excel(path: str):
+    """Загружает данные из Excel в список словарей"""
     if not os.path.exists(path):
-        return pd.DataFrame(columns=EXCEL_FIELDS)
+        return []
+    
     try:
-        df = pd.read_excel(path, engine='openpyxl')
-        for col in EXCEL_FIELDS:
-            if col not in df.columns:
-                df[col] = ''
-        return df
+        from openpyxl import load_workbook
+        workbook = load_workbook(path, read_only=True)
+        worksheet = workbook.active
+        
+        # Читаем заголовки из первой строки
+        headers = []
+        for cell in worksheet[1]:
+            if cell.value:
+                headers.append(cell.value)
+            else:
+                break
+        
+        if not headers:
+            return []
+        
+        # Читаем данные
+        data = []
+        for row in worksheet.iter_rows(min_row=2, values_only=True):
+            if not any(row):  # Пропускаем пустые строки
+                continue
+            
+            row_dict = {}
+            for i, value in enumerate(row):
+                if i < len(headers):
+                    row_dict[headers[i]] = value if value is not None else ''
+                    
+            # Добавляем недостающие поля
+            for field in EXCEL_FIELDS:
+                if field not in row_dict:
+                    row_dict[field] = ''
+                    
+            data.append(row_dict)
+        
+        workbook.close()
+        return data
+        
     except Exception as e:
         print(f"[ПОПЕРЕДЖЕННЯ] Не вдалося завантажити існуючий Excel файл: {e}")
         print("Створюємо новий файл...")
-        return pd.DataFrame(columns=EXCEL_FIELDS)
+        return []
 
 
-def save_excel_with_formatting(path: str, df):
-    if df.empty:
-        print("[ПРЕДУПРЕЖДЕНИЕ] DataFrame пустой, создаем файл только с заголовками")
-        df = pd.DataFrame(columns=EXCEL_FIELDS)
+def save_excel_with_formatting(path: str, data_list):
+    """Сохраняет список словарей в Excel с форматированием"""
+    if not data_list:
+        print("[ПОПЕРЕДЖЕННЯ] Список даних порожній, створюємо файл тільки з заголовками")
+        data_list = []
     
     # Группируем данные по товарам и собираем историю
     products_history = {}
     all_dates = set()
     
-    for _, row in df.iterrows():
+    for row in data_list:
         url = row.get('url', '')
         if url not in products_history:
             products_history[url] = {
@@ -522,8 +552,8 @@ def save_excel_with_formatting(path: str, df):
         print(f"[ОШИБКА] Не удалось сохранить Excel файл: {e}")
         raise
 
-
-def upsert_rows(df, new_items):
+def upsert_rows(existing_data, new_items):
+    """Обновляет список данных новыми элементами"""
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     new_rows = []
     
@@ -539,22 +569,17 @@ def upsert_rows(df, new_items):
             'max_stock': item.get('max_stock', 0),
         })
     
-    new_df = pd.DataFrame(new_rows, columns=EXCEL_FIELDS)
+    if not existing_data:
+        existing_data = []
     
-    if df.empty:
-        df = pd.DataFrame(columns=EXCEL_FIELDS)
+    # Удаляем старые записи для тех же URL
+    new_urls = [row['url'] for row in new_rows]
+    filtered_existing = [row for row in existing_data if row.get('url', '') not in new_urls]
     
-    for col in EXCEL_FIELDS:
-        if col not in df.columns:
-            df[col] = ''
+    # Добавляем новые записи
+    filtered_existing.extend(new_rows)
     
-    if not new_df.empty and 'url' in new_df.columns and 'url' in df.columns:
-        df = df[~df['url'].isin(new_df['url'])]
-        df = pd.concat([df, new_df], ignore_index=True)
-    elif not new_df.empty:
-        df = new_df
-    
-    return df
+    return filtered_existing
 
 
 def read_urls_from_file(fname):
