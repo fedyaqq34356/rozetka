@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, time
 from typing import List, Dict, Optional
 import tempfile
+import openpyxl.utils
+
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,7 +20,6 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
-import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
@@ -244,31 +245,37 @@ class DatabaseManager:
         conn.close()
 
     def sync_with_excel(self):
-        """Синхронізація з Excel файлом main.py"""
+        """Синхронізація з Excel файлом"""
         try:
             if os.path.exists(EXCEL_FILENAME):
-                df = load_existing_excel(EXCEL_FILENAME)
-                logger.info(f"Завантажено {len(df)} записів з Excel")
+                data_list = load_existing_excel(EXCEL_FILENAME)
+                logger.info(f"Завантажено {len(data_list)} записів з Excel")
                 
-                for _, row in df.iterrows():
-                    if pd.notna(row.get('url')):
+                for row in data_list:
+                    url = row.get('url', '')
+                    if url:  # Проверяем, что URL не пустой
                         # Додаємо товар в базу даних
                         self.add_product(
-                            url=str(row.get('url', '')),
+                            url=str(url),
                             name=str(row.get('name', '')),
                             category=str(row.get('category', ''))
                         )
                         
                         # Оновлюємо залишки якщо є дані
-                        if pd.notna(row.get('max_stock')):
-                            product_id = self.get_product_id_by_url(str(row.get('url', '')))
+                        max_stock = row.get('max_stock')
+                        if max_stock is not None and max_stock != '':
+                            product_id = self.get_product_id_by_url(str(url))
                             if product_id:
-                                stock = int(row.get('max_stock', 0))
-                                self.update_product_stock(product_id, stock)
+                                try:
+                                    stock = int(max_stock)
+                                    self.update_product_stock(product_id, stock)
+                                except (ValueError, TypeError):
+                                    pass  # Пропускаем некорректные значения
                 
                 logger.info("Синхронізація з Excel завершена")
         except Exception as e:
             logger.error(f"Помилка синхронізації з Excel: {e}")
+
 
     def export_to_excel(self):
         """Експорт даних в Excel для main.py"""
@@ -287,13 +294,13 @@ class DatabaseManager:
             
             if excel_data:
                 # Завантажуємо існуючий Excel
-                existing_df = load_existing_excel(EXCEL_FILENAME)
+                existing_data = load_existing_excel(EXCEL_FILENAME)
                 
                 # Оновлюємо дані
-                updated_df = upsert_rows(existing_df, excel_data)
+                updated_data = upsert_rows(existing_data, excel_data)
                 
                 # Зберігаємо
-                save_excel_with_formatting(EXCEL_FILENAME, updated_df)
+                save_excel_with_formatting(EXCEL_FILENAME, updated_data)
                 logger.info(f"Експортовано {len(excel_data)} товарів в Excel")
                 
         except Exception as e:
@@ -523,7 +530,7 @@ class RozetkaTelegramBot:
             
             wb = Workbook()
             ws = wb.active
-            ws.title = "История остатков"
+            ws.title = "Історія залишків"
             
             # Определяем все даты
             all_dates = set()
@@ -532,51 +539,125 @@ class RozetkaTelegramBot:
             
             sorted_dates = sorted(list(all_dates))
             
-            # Заголовки
-            headers = ["Товар", "URL", "Категория"] + sorted_dates
+            # Создаем заголовки с колонками изменений
+            headers = ["Товар", "URL", "Категорія"]
+            for date in sorted_dates:
+                headers.extend([f"{date}\nкількість", f"{date}\nзміни"])
+            
+            # Заполняем заголовки
             for col, header in enumerate(headers, 1):
                 cell = ws.cell(row=1, column=col, value=header)
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-                cell.alignment = Alignment(horizontal="center")
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                cell.border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
             
-            # Данные
+            # Заполняем данные
             for row_idx, product in enumerate(products_data, 2):
+                # Основная информация о товаре
                 ws.cell(row=row_idx, column=1, value=product['name'])
                 ws.cell(row=row_idx, column=2, value=product['url'])
                 ws.cell(row=row_idx, column=3, value=product['category'])
                 
                 # Заполняем данные по датам
-                for col_idx, date in enumerate(sorted_dates, 4):
-                    stock_value = product['history'].get(date, '')
-                    stock_cell = ws.cell(row=row_idx, column=col_idx, value=stock_value)
+                previous_stock = None
+                col_idx = 4
+                
+                for date in sorted_dates:
+                    current_stock = product['history'].get(date, '')
                     
-                    if stock_value and stock_value > 0:
+                    # Колонка количества
+                    stock_cell = ws.cell(row=row_idx, column=col_idx, value=current_stock)
+                    stock_cell.alignment = Alignment(horizontal="center", vertical="center")
+                    stock_cell.border = Border(
+                        left=Side(style='thin'),
+                        right=Side(style='thin'),
+                        top=Side(style='thin'),
+                        bottom=Side(style='thin')
+                    )
+                    
+                    # Цветовое кодирование для количества
+                    if current_stock and current_stock > 0:
                         stock_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-                    elif stock_value == 0:
+                    elif current_stock == 0:
                         stock_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                    
+                    # Колонка изменений
+                    change_cell = ws.cell(row=row_idx, column=col_idx + 1)
+                    change_cell.alignment = Alignment(horizontal="center", vertical="center")
+                    change_cell.border = Border(
+                        left=Side(style='thin'),
+                        right=Side(style='thin'),
+                        top=Side(style='thin'),
+                        bottom=Side(style='thin')
+                    )
+                    
+                    # Вычисляем изменения
+                    if previous_stock is not None and current_stock != '' and previous_stock != '':
+                        try:
+                            change = int(current_stock) - int(previous_stock)
+                            if change != 0:
+                                change_cell.value = change
+                                # Цветовое кодирование для изменений
+                                if change > 0:
+                                    change_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                                    change_cell.font = Font(color="006100", bold=True)
+                                else:
+                                    change_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                                    change_cell.font = Font(color="9C0006", bold=True)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Обновляем previous_stock для следующей итерации
+                    if current_stock != '':
+                        previous_stock = current_stock
+                    
+                    col_idx += 2
             
-            # Настройка столбцов
-            ws.column_dimensions['A'].width = 40
-            ws.column_dimensions['B'].width = 60
-            ws.column_dimensions['C'].width = 25
+            # Настройка ширины столбцов
+            ws.column_dimensions['A'].width = 40  # Товар
+            ws.column_dimensions['B'].width = 60  # URL
+            ws.column_dimensions['C'].width = 25  # Категория
             
-            # Автоширина для столбцов с датами
-            for col_idx in range(4, len(headers) + 1):
-                ws.column_dimensions[chr(64 + col_idx)].width = 12
+            # Для колонок с датами и изменениями
+            col_idx = 4
+            for _ in sorted_dates:
+                col_letter_qty = openpyxl.utils.get_column_letter(col_idx)
+                col_letter_change = openpyxl.utils.get_column_letter(col_idx + 1)
+                ws.column_dimensions[col_letter_qty].width = 12    # Количество
+                ws.column_dimensions[col_letter_change].width = 10  # Изменения
+                col_idx += 2
+            
+            # Высота строк
+            ws.row_dimensions[1].height = 30  # Заголовок
+            for row in range(2, len(products_data) + 2):
+                ws.row_dimensions[row].height = 25
+            
+            # Закрепляем первые строки и столбцы
+            ws.freeze_panes = 'D2'
+            
+            # Автофильтр
+            max_row = len(products_data) + 1
+            max_col = len(headers)
+            ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(max_col)}{max_row}"
             
             wb.save(filepath)
-            logger.info(f"Excel файл создан: {filepath}")
+            logger.info(f"Excel файл створено: {filepath}")
             
             return filepath
             
         except Exception as e:
-            logger.error(f"Ошибка создания Excel: {e}")
+            logger.error(f"Помилка створення Excel: {e}")
             # Создаем простой файл с ошибкой
             wb = Workbook()
             ws = wb.active
-            ws.title = "Ошибка"
-            ws.cell(row=1, column=1, value=f"Ошибка создания файла: {str(e)}")
+            ws.title = "Помилка"
+            ws.cell(row=1, column=1, value=f"Помилка створення файлу: {str(e)}")
             wb.save(filepath)
             return filepath
             
@@ -630,19 +711,29 @@ class RozetkaTelegramBot:
                 await processing_msg.edit_text(f"❌ Помилка: {result['error']}")
                 return
             
-            # НЕ зберігаємо товар в базу даних при ручному додаванні
-            stock = result.get('max_stock', 0)
-            
-            success_text = (
-                f"✅ Товар перевірено!\n\n"
-                f"📦 <b>{result.get('title', 'Без назви')}</b>\n"
-                f"📂 Категорія: {result.get('category', 'Невідома')}\n"
-                f"📊 Поточні залишки: {stock}\n"
-                f"🔗 URL: {result['url'][:50]}...\n\n"
-                f"ℹ️ Товар НЕ збережено. Для збереження використовуйте автоматичну перевірку"
+            # Додаємо товар в базу даних БЕЗ оновлення залишків
+            success = self.db.add_product(
+                url=result['url'],
+                name=result.get('title', ''),
+                category=result.get('category', '')
             )
             
-            await processing_msg.edit_text(success_text, parse_mode="HTML")
+            if success:
+                stock = result.get('max_stock', 0)
+                
+                # НЕ зберігаємо залишки та НЕ експортуємо в Excel при ручному додаванні
+                success_text = (
+                    f"✅ Товар додано!\n\n"
+                    f"📦 <b>{result.get('title', 'Без назви')}</b>\n"
+                    f"📂 Категорія: {result.get('category', 'Невідома')}\n"
+                    f"📊 Поточні залишки: {stock}\n"
+                    f"🔗 URL: {result['url'][:50]}...\n\n"
+                    f"ℹ️ Залишки будуть збережені тільки при автоматичній перевірці"
+                )
+                
+                await processing_msg.edit_text(success_text, parse_mode="HTML")
+            else:
+                await processing_msg.edit_text("❌ Помилка збереження товару")
                 
         except Exception as e:
             logger.error(f"Помилка обробки URL {url}: {e}")
@@ -705,6 +796,28 @@ class RozetkaTelegramBot:
                 await asyncio.sleep(2)
         
         return results
+
+
+    async def process_schedule_time(self, message: Message, state: FSMContext):
+        time_text = message.text.strip()
+        
+        # Проверяем формат времени
+        if not re.match(r'^\d{1,2}:\d{2}$', time_text):
+            await message.reply("❌ Неправильний формат часу. Використовуйте ГГ:ХХ (наприклад, 09:30)")
+            return
+        
+        try:
+            # Проверяем валидность времени
+            time.fromisoformat(time_text + ":00")
+            
+            self.db.set_schedule_time(time_text)
+            await message.reply(f"✅ Час щоденної перевірки встановлено: {time_text}")
+            
+        except ValueError:
+            await message.reply("❌ Неправильний час. Використовуйте формат ГГ:ХХ")
+        
+        await state.clear()
+
 
     async def schedule_checker(self):
         while True:
