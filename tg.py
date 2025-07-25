@@ -277,6 +277,7 @@ class DatabaseManager:
             logger.error(f"Помилка синхронізації з Excel: {e}")
 
 
+
     def export_to_excel(self):
         """Експорт даних в Excel для main.py"""
         try:
