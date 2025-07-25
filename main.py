@@ -48,7 +48,6 @@ except ImportError:
     _HAVE_AIOGRAM = False
     print("[ПОПЕРЕДЖЕННЯ] Модуль aiogram не встановлено. Функціонал Telegram бота недоступний")
 
-import pandas as pd
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
