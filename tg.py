@@ -293,7 +293,7 @@ class RozetkaStockChecker:
         return max_available, add_data
 
     def parse_category_from_html(self, product_url, category_id):
-        """УЛУЧШЕННАЯ функция парсингу категорії"""
+        """Покращена функція парсингу категорії з більш точними селекторами"""
         try:
             resp = self.scraper.get(product_url, timeout=15)
             html = resp.text
@@ -301,42 +301,35 @@ class RozetkaStockChecker:
             if self.debug:
                 print(f"[parse_category] Шукаємо категорію ID: {category_id}")
             
+            # Спочатку шукаємо в JSON-LD структурованих даних
+            json_patterns = [
+                rf'"name"\s*:\s*"([^"]*)"[^}}]*"@id"\s*:\s*"[^"]*/{category_id}/',
+                rf'"@id"\s*:\s*"[^"]*/{category_id}/[^"]*"[^}}]*"name"\s*:\s*"([^"]*)"',
+                rf'"categoryId"\s*:\s*{category_id}[^}}]*"name"\s*:\s*"([^"]*)"',
+                rf'"id"\s*:\s*{category_id}[^}}]*"title"\s*:\s*"([^"]*)"'
+            ]
+            
+            for pattern in json_patterns:
+                matches = re.finditer(pattern, html, re.I | re.S)
+                for match in matches:
+                    category_name = match.group(1).strip()
+                    if category_name and len(category_name) > 2 and len(category_name) < 100:
+                        if self.debug:
+                            print(f"[parse_category] Знайдено в JSON: '{category_name}'")
+                        return category_name
+            
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # Расширенные селекторы для поиска категории
-                selectors = [
-                    f'a[href*="/c{category_id}/"]',
-                    f'a[href*="/ua/c{category_id}/"]',
-                    f'a[href*="c{category_id}"]',
-                    f'*[data-id="{category_id}"]',
-                    f'*[data-category-id="{category_id}"]'
-                ]
-                
-                for selector in selectors:
-                    try:
-                        elements = soup.select(selector)
-                        for element in elements:
-                            text = element.get_text(strip=True)
-                            if text and len(text) > 2 and len(text) < 100:  # Разумные ограничения длины
-                                # Фильтруем технические элементы
-                                if not any(skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon']):
-                                    if self.debug:
-                                        print(f"[parse_category] Знайдено категорію: '{text}' за селектором '{selector}'")
-                                    return text
-                    except Exception as e:
-                        if self.debug:
-                            print(f"[parse_category] Ошибка селектора {selector}: {e}")
-                        continue
-                
-                # Поиск в breadcrumbs (хлібні крихти)
+                # Шукаємо у breadcrumbs (найбільш надійно)
                 breadcrumb_selectors = [
                     '.breadcrumbs a',
                     '.rz-breadcrumbs a', 
                     '[data-testid="breadcrumbs"] a',
                     '.catalog-heading a',
                     '.breadcrumb a',
-                    'nav a'
+                    'nav a',
+                    '.rz-catalog-breadcrumbs a'
                 ]
                 
                 for selector in breadcrumb_selectors:
@@ -344,41 +337,65 @@ class RozetkaStockChecker:
                         elements = soup.select(selector)
                         for element in elements:
                             href = element.get('href', '')
-                            if f'/c{category_id}/' in href or f'c{category_id}' in href:
+                            # Шукаємо точний збіг category_id в URL
+                            if re.search(rf'/c{category_id}(?:/|$)', href):
                                 text = element.get_text(strip=True)
                                 if text and len(text) > 2 and len(text) < 100:
+                                    # Фільтруємо технічні елементи
+                                    if not any(skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']):
+                                        if self.debug:
+                                            print(f"[parse_category] Знайдено в breadcrumbs: '{text}'")
+                                        return text
+                    except Exception as e:
+                        if self.debug:
+                            print(f"[parse_category] Помилка breadcrumb селектора {selector}: {e}")
+                        continue
+                
+                # Альтернативні селектори для категорій
+                category_selectors = [
+                    f'a[href*="/c{category_id}/"]',
+                    f'a[href*="/ua/c{category_id}/"]',
+                    f'*[data-category-id="{category_id}"]',
+                    f'*[data-id="{category_id}"]'
+                ]
+                
+                for selector in category_selectors:
+                    try:
+                        elements = soup.select(selector)
+                        for element in elements:
+                            text = element.get_text(strip=True)
+                            if text and len(text) > 2 and len(text) < 100:
+                                if not any(skip in text.lower() for skip in ['>', '<', 'function', 'script', 'style']):
                                     if self.debug:
-                                        print(f"[parse_category] Знайдено в breadcrumbs: '{text}'")
+                                        print(f"[parse_category] Знайдено за селектором '{selector}': '{text}'")
                                     return text
                     except Exception as e:
                         if self.debug:
-                            print(f"[parse_category] Ошибка breadcrumb селектора {selector}: {e}")
+                            print(f"[parse_category] Помилка селектора {selector}: {e}")
                         continue
             
-            # Улучшенный regex поиск
-            patterns = [
+            # Regex пошук як останній варіант
+            regex_patterns = [
                 rf'<a[^>]+href="[^"]*/?c{category_id}/[^"]*"[^>]*>([^<]+)</a>',
-                rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>(.*?)</a>',
-                rf'href="[^"]*c{category_id}[^"]*"[^>]*>([^<]*)</a>',
-                rf'"category_name"\s*:\s*"([^"]*)"',  # JSON данные
-                rf'"categoryName"\s*:\s*"([^"]*)"'
+                rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>([^<]*?)</a>',
+                rf'"name"\s*:\s*"([^"]*)"[^}}]*"categoryId"\s*:\s*"?{category_id}"?',
+                rf'"title"\s*:\s*"([^"]*)"[^}}]*"id"\s*:\s*"?{category_id}"?'
             ]
             
-            for pattern in patterns:
+            for pattern in regex_patterns:
                 try:
                     matches = re.finditer(pattern, html, re.I | re.S)
                     for match in matches:
                         text = re.sub(r'<[^>]+>', '', match.group(1)).strip()
                         text = re.sub(r'\s+', ' ', text)
                         if text and len(text) > 2 and len(text) < 100:
-                            # Дополнительная фильтрация
-                            if not any(skip in text.lower() for skip in ['>', '<', 'function', 'script', 'style']):
+                            if not any(skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']): 
                                 if self.debug:
                                     print(f"[parse_category] Знайдено regex: '{text}'")
                                 return text
                 except Exception as e:
                     if self.debug:
-                        print(f"[parse_category] Ошибка pattern {pattern}: {e}")
+                        print(f"[parse_category] Помилка pattern: {e}")
                     continue
             
             if self.debug:
