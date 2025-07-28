@@ -818,26 +818,63 @@ class RozetkaTelegramBot:
 
 
     async def schedule_checker(self):
+        """Покращений планувальник з більш точною перевіркою часу"""
+        last_check_date = None
+        
         while True:
             try:
                 schedule_time = self.db.get_schedule_time()
                 if schedule_time:
-                    now = datetime.now().time()
-                    target_time = time.fromisoformat(schedule_time + ":00")
+                    now = datetime.now()
+                    current_date = now.date()
+                    current_time = now.time()
                     
-                    if now.hour == target_time.hour and now.minute == target_time.minute:
-                        logger.info("Запуск планової АВТОМАТИЧНОЇ перевірки")
-                        await self.check_all_products()  # Ця функція зберігає дані
-                        
-                        # Експортуємо в Excel після автоматичної перевірки
-                        self.db.export_to_excel()
-                        
+                    # Парсимо час з бази
+                    try:
+                        target_hour, target_minute = map(int, schedule_time.split(':'))
+                        target_time = time(target_hour, target_minute)
+                    except ValueError:
+                        logger.error(f"Неправильний формат часу в базі: {schedule_time}")
                         await asyncio.sleep(60)
-                
-                await asyncio.sleep(60)
-                
+                        continue
+                    
+                    # Перевіряємо чи потрібно запускати перевірку
+                    should_run = (
+                        current_date != last_check_date and  # Не запускали сьогодні
+                        current_time.hour == target_time.hour and 
+                        current_time.minute == target_time.minute
+                    )
+                    
+                    if should_run:
+                        logger.info(f"🕐 Запуск планової автоматичної перевірки о {schedule_time}")
+                        
+                        try:
+                            # Запускаємо перевірку всіх товарів
+                            results = await self.check_all_products(manual=False)
+                            
+                            # Експортуємо в Excel після автоматичної перевірки
+                            self.db.export_to_excel()
+                            
+                            # Оновлюємо дату останньої перевірки
+                            last_check_date = current_date
+                            
+                            success_count = sum(1 for r in results if r.get('success', False))
+                            logger.info(f"✅ Автоматична перевірка завершена: {success_count}/{len(results)} товарів")
+                            
+                        except Exception as e:
+                            logger.error(f"Помилка автоматичної перевірки: {e}")
+                        
+                        # Чекаємо 2 хвилини щоб не запускати повторно
+                        await asyncio.sleep(120)
+                    else:
+                        # Звичайна пауза
+                        await asyncio.sleep(30)
+                else:
+                    # Якщо час не встановлено, чекаємо довше
+                    await asyncio.sleep(300)
+                    
             except Exception as e:
-                logger.error(f"Помилка планувальника: {e}")
+                logger.error(f"Критична помилка планувальника: {e}")
                 await asyncio.sleep(300)
 
     async def start_bot(self):
