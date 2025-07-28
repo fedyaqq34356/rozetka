@@ -718,24 +718,25 @@ class RozetkaTelegramBot:
             # Додаємо товар в базу даних БЕЗ оновлення залишків
             success = self.db.add_product(
                 url=result['url'],
-                name=result.get('title', ''),
-                category=result.get('category', 'Невідома')  # Явно указываем значение по умолчанию
+                name=result.get('title', 'Без назви'),
+                category=result.get('category', 'Невідома')
             )
             
             if success:
                 stock = result.get('max_stock', 0)
+                category = result.get('category', 'Невідома')
                 
                 success_text = (
                     f"✅ Товар додано!\n\n"
                     f"📦 <b>{result.get('title', 'Без назви')}</b>\n"
-                    f"📂 Категорія: {result.get('category', 'Невідома')}\n"
+                    f"📂 Категорія: {category}\n"
                     f"📊 Поточні залишки: {stock}\n"
                     f"🔗 URL: {result['url'][:50]}...\n\n"
                     f"ℹ️ Залишки будуть збережені тільки при автоматичній перевірці"
                 )
                 
                 await processing_msg.edit_text(success_text, parse_mode="HTML")
-                logger.info(f"Товар додано: {result.get('title', 'Без назви')}, категорія: {result.get('category', 'Невідома')}")
+                logger.info(f"Товар додано: {result.get('title', 'Без назви')}, категорія: {category}, URL: {result['url']}")
             else:
                 await processing_msg.edit_text("❌ Помилка збереження товару")
                 
