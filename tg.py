@@ -258,60 +258,61 @@ class RozetkaStockChecker:
         return max_available, add_data
 
     def parse_category_from_html(self, product_url, category_id):
-        """Простая функция парсинга категории с приоритетом на селектор a[rzrelnofollow].black-link"""
+        """Простая функция парсинга категории с приоритетом на rz-breadcrumbs и a[rzrelnofollow].black-link"""
         try:
-            # Завантажуємо HTML сторінки
             resp = self.scraper.get(product_url, timeout=15)
             resp.raise_for_status()
             html = resp.text
 
+            # Сохраняем HTML для отладки
+            if self.debug:
+                with open("debug_page.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                print(f"[parse_category] HTML збережено в debug_page.html для URL: {product_url}")
+
             if self.debug:
                 print(f"[parse_category] Шукаємо категорію ID: {category_id}")
 
-            # Парсинг через BeautifulSoup с приоритетом на a[rzrelnofollow].black-link
+            # Парсинг через BeautifulSoup
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
-                
-                # Прямой поиск нужного селектора
-                link = soup.select_one('a[rzrelnofollow].black-link')
+
+                # Прямой поиск по XPath-подобному селектору
+                xpath_selector = 'rz-breadcrumbs div:nth-child(6) a'
+                link = soup.select_one(xpath_selector)
                 if link:
                     text = link.get_text(strip=True)
                     if text and 2 < len(text) < 100 and not any(
                         skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
                     ):
                         if self.debug:
-                            print(f"[parse_category] Знайдено в a[rzrelnofollow].black-link: '{text}'")
+                            print(f"[parse_category] Знайдено в селекторі '{xpath_selector}': '{text}'")
                         return text
 
-                # Резервные селекторы для breadcrumbs
-                breadcrumb_selectors = [
-                    '.breadcrumbs a',
-                    '.rz-breadcrumbs a',
-                    '[data-testid="breadcrumbs"] a',
-                    '.catalog-heading a',
-                    '.breadcrumb a',
-                    'nav a',
-                    '.rz-catalog-breadcrumbs a',
+                # Другие селекторы
+                selectors = [
+                    'a[rzrelnofollow].black-link',
+                    'a.black-link[rzrelnofollow]',
+                    'a.d-flex.black-link',
+                    'a[rzrelnofollow][class*="black-link"]',
                     f'a[href*="/c{category_id}/"]',
                     f'a[href*="/ua/c{category_id}/"]'
                 ]
 
-                for selector in breadcrumb_selectors:
+                for selector in selectors:
                     try:
-                        elements = soup.select(selector)
-                        for element in elements:
-                            href = element.get('href', '')
-                            if re.search(rf'/c{category_id}(?:/|$)', href):
-                                text = element.get_text(strip=True)
-                                if text and 2 < len(text) < 100 and not any(
-                                    skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
-                                ):
-                                    if self.debug:
-                                        print(f"[parse_category] Знайдено в breadcrumbs селекторі '{selector}': '{text}'")
-                                    return text
+                        link = soup.select_one(selector)
+                        if link:
+                            text = link.get_text(strip=True)
+                            if text and 2 < len(text) < 100 and not any(
+                                skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
+                            ):
+                                if self.debug:
+                                    print(f"[parse_category] Знайдено в селекторі '{selector}': '{text}'")
+                                return text
                     except Exception as e:
                         if self.debug:
-                            print(f"[parse_category] Помилка breadcrumb селектора {selector}: {e}")
+                            print(f"[parse_category] Помилка селектора '{selector}': {e}")
                         continue
 
             # Резервный поиск через regex
@@ -337,7 +338,7 @@ class RozetkaStockChecker:
                 except Exception as e:
                     if self.debug:
                         print(f"[parse_category] Помилка pattern: {e}")
-                    continue
+                        continue
 
             # Резервный вызов API
             category_name = self.get_category_from_api(category_id)
