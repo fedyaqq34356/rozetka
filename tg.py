@@ -369,11 +369,12 @@ class RozetkaStockChecker:
         return None
 
     def get_product_meta(self, product_url, add_data, product_id):
-        """Получение метаданных товара"""
+        """ВИПРАВЛЕНА функція отримання метаданих товару"""
         title = None
-        category_name = None
+        category_id = None
+        original_url = product_url
         
-        # Получаем название из API корзины
+        # Спочатку намагаємося отримати дані з API відповіді корзини
         if add_data:
             goods_items = add_data.get('purchases', {}).get('goods')
             if goods_items:
@@ -381,56 +382,60 @@ class RozetkaStockChecker:
                     goods = item.get('goods', {})
                     if goods.get('id') == product_id:
                         title = goods.get('title') or goods.get('name') or None
-                        if title:
-                            title = re.sub(r'\s+', ' ', title).strip()
+                        category_id = goods.get('category_id') or None
+                        # Оновлюємо URL якщо є кращий варіант
+                        api_url = goods.get('href') or goods.get('url')
+                        if api_url:
+                            product_url = api_url
                         break
         
-        # Парсим страницу для получения категории и названия
-        try:
-            resp = self.scraper.get(product_url, timeout=15)
-            html = resp.text
-            
-            # Получаем название товара если не получили из API
-            if not title and _HAVE_BS4:
-                soup = BeautifulSoup(html, 'html.parser')
-                title_element = soup.select_one('h1')
-                if title_element:
-                    title = title_element.get_text(strip=True)
-                    if title:
-                        title = re.sub(r'\s+', ' ', title).strip()
-            
-            # Ищем категорию через regex - ссылку с rzrelnofollow
-            pattern = r'<a[^>]*rzrelnofollow[^>]*class="[^"]*black-link[^"]*"[^>]*>(.*?)</a>'
-            match = re.search(pattern, html, re.I | re.S)
-            
-            if match:
-                content = match.group(1)
-                # Удаляем SVG полностью
-                content = re.sub(r'<svg[^>]*>.*?</svg>', '', content, flags=re.S | re.I)
-                # Получаем чистый текст
-                clean_text = re.sub(r'<[^>]+>', '', content).strip()
-                clean_text = re.sub(r'\s+', ' ', clean_text)
-                # Убираем комментарии HTML
-                clean_text = re.sub(r'<!---->', '', clean_text).strip()
+        # Якщо не вдалося отримати з API, пробуємо парсинг HTML
+        if not title or not category_id:
+            try:
+                resp = self.scraper.get(original_url)
+                html = resp.text
                 
-                if clean_text and len(clean_text) > 2:
-                    category_name = clean_text
+                if not title and _HAVE_BS4:
+                    soup = BeautifulSoup(html, 'html.parser')
                     
-        except Exception as e:
-            if self.debug:
-                print(f"[get_product_meta] Ошибка парсинга: {e}")
+                    # Селектори для назви товару
+                    title_selectors = [
+                        'h1.product__title',
+                        'h1[data-testid="product-title"]',
+                        '.product-title h1',
+                        'h1.rz-product-title',
+                        'h1'
+                    ]
+                    
+                    for selector in title_selectors:
+                        element = soup.select_one(selector)
+                        if element:
+                            title = element.get_text(strip=True)
+                            if title:
+                                break
+                
+                # Якщо не знайшли category_id в API, шукаємо в URL
+                if not category_id:
+                    # Шукаємо в поточному URL
+                    match = re.search(r'/c(\d+)/', product_url)
+                    if not match:
+                        match = re.search(r'/c(\d+)/', original_url)
+                    if match:
+                        category_id = int(match.group(1))
+                
+            except Exception as e:
+                if self.debug:
+                    print(f"[get_product_meta] Помилка парсингу HTML: {e}")
         
-        # Очистка данных
-        if title:
-            title = title[:200]
-        if category_name:
-            category_name = category_name[:100]
-        
+        # Отримуємо назву категорії
+        category_name = None
+        if category_id is not None:
+            category_name = self.parse_category_from_html(product_url, category_id)
+            
         if self.debug:
-            print(f"[get_product_meta] Результат: title='{title}', category='{category_name}'")
+            print(f"[get_product_meta] Результат: title='{title}', category='{category_name}', category_id={category_id}")
             
         return title, category_name
-
     def get_category_from_breadcrumbs(self, product_url, category_id):
         """Отримання категорії з breadcrumbs для тега з rzrelnofollow і black-link"""
         try:
