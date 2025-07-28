@@ -307,16 +307,13 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Помилка експорту в Excel: {e}")
 
-# Клас бота для Telegram
 class RozetkaTelegramBot:
     def __init__(self):
         self.bot = Bot(token=BOT_TOKEN)
         self.dp = Dispatcher(storage=MemoryStorage())
         self.db = DatabaseManager()
-        self.checker = ImprovedRozetkaChecker(debug=False, delay=0.7)
+        self.checker = ImprovedRozetkaChecker(debug=True, delay=0.7)  # Enable debug
         self.setup_handlers()
-        
-        # Синхронізуємо з Excel при запуску
         self.db.sync_with_excel()
 
     def setup_handlers(self):
