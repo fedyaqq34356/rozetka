@@ -11,8 +11,6 @@ except ImportError:
     print("[ПОМИЛКА] Потрібно встановити cloudscraper: pip install cloudscraper")
     raise
 
-
-
 try:
     import openpyxl
     from openpyxl.styles import NamedStyle, Font, PatternFill, Border, Side, Alignment
@@ -26,7 +24,6 @@ try:
     _HAVE_BS4 = True
 except ImportError:
     _HAVE_BS4 = False
-
 
 class RozetkaStockChecker:
     def __init__(self, debug=False, delay=0.7):
@@ -57,12 +54,10 @@ class RozetkaStockChecker:
         """Очищаємо стан сесії перед перевіркою нового товару"""
         self.csrf_token = None
         self.purchase_id = None
-        # Очищаємо кукі та створюємо новий scraper для кожного товару
         self.scraper = cloudscraper.create_scraper()
 
     def get_csrf_token(self):
         try:
-            # Make request with additional headers to mimic a browser
             headers = self.base_headers.copy()
             headers.update({
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -74,7 +69,6 @@ class RozetkaStockChecker:
             resp = self.scraper.get('https://rozetka.com.ua/', headers=headers, timeout=10)
             resp.raise_for_status()
 
-            # Check cookies
             cookies = self.scraper.cookies.get_dict()
             if self.debug:
                 print("[ДЕБАГ] Все куки:", cookies)
@@ -87,7 +81,6 @@ class RozetkaStockChecker:
                         print(f"[ДЕБАГ] Найден CSRF токен '{csrf_name}': {self.csrf_token}")
                     return True
 
-            # Parse HTML for token
             html = resp.text
             csrf_patterns = [
                 r'name="csrf-token"\s+content="([^"]+)"',
@@ -104,7 +97,6 @@ class RozetkaStockChecker:
                         print(f"[ДЕБАГ] CSRF токен найден в HTML: {self.csrf_token}")
                     return True
 
-            # Try API request to set cookies
             test_url = 'https://uss.rozetka.com.ua/session/cart-se/clear?country=UA&lang=ua'
             test_resp = self.scraper.post(test_url, json={}, headers=self.base_headers, timeout=10)
             cookies = self.scraper.cookies.get_dict()
@@ -122,31 +114,6 @@ class RozetkaStockChecker:
         except Exception as e:
             if self.debug:
                 print(f"[CSRF] Помилка: {e}")
-            return False
-            
-            # Если ничего не нашли, попробуем сделать запрос к API без токена
-            # Иногда первый запрос может установить нужные куки
-            try:
-                test_url = 'https://uss.rozetka.com.ua/session/cart-se/clear?country=UA&lang=ua'
-                test_resp = self.scraper.post(test_url, json={})
-                
-                # Проверяем куки еще раз
-                cookies = self.scraper.cookies.get_dict()
-                for csrf_name in possible_csrf_names:
-                    if csrf_name in cookies:
-                        self.csrf_token = cookies[csrf_name]
-                        if self.debug:
-                            print(f"[ДЕБАГ] CSRF токен получен после тестового запроса: {self.csrf_token}")
-                        return True
-            except:
-                pass
-            
-            if self.debug:
-                print("[ДЕБАГ] CSRF токен не найден")
-            return False
-            
-        except Exception as e:
-            print(f"[CSRF] Помилка: {e}")
             return False
 
     @staticmethod
@@ -180,7 +147,6 @@ class RozetkaStockChecker:
     def add_to_cart(self, product_id):
         self._ensure_csrf()
         
-        # Очищаємо корзину перед додаванням
         self.clear_cart()
         
         url = 'https://uss.rozetka.com.ua/session/cart-se/add?country=UA&lang=ua'
@@ -198,7 +164,6 @@ class RozetkaStockChecker:
                 data = r.json()
                 goods_items = data.get('purchases', {}).get('goods')
                 if goods_items and len(goods_items) > 0:
-                    # ВИПРАВЛЕННЯ: Перевіряємо що товар той самий
                     for item in goods_items:
                         if item.get('goods', {}).get('id') == product_id:
                             self.purchase_id = item['id']
@@ -273,7 +238,7 @@ class RozetkaStockChecker:
             for err in errors:
                 if self.debug:
                     print(f"[БП] Помилка: {err}")
-                if err.get('code') == 3002:  # Код помилки "недостатньо товару"
+                if err.get('code') == 3002:
                     not_enough = True
                     break
                     
@@ -301,7 +266,6 @@ class RozetkaStockChecker:
             if self.debug:
                 print(f"[parse_category] Шукаємо категорію ID: {category_id}")
             
-            # Спочатку шукаємо в JSON-LD структурованих даних
             json_patterns = [
                 rf'"name"\s*:\s*"([^"]*)"[^}}]*"@id"\s*:\s*"[^"]*/{category_id}/',
                 rf'"@id"\s*:\s*"[^"]*/{category_id}/[^"]*"[^}}]*"name"\s*:\s*"([^"]*)"',
@@ -321,8 +285,8 @@ class RozetkaStockChecker:
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # Шукаємо у breadcrumbs (найбільш надійно)
                 breadcrumb_selectors = [
+                    'a[rzrelnofollow].black-link',
                     '.breadcrumbs a',
                     '.rz-breadcrumbs a',
                     '[data-testid="breadcrumbs"] a',
@@ -330,7 +294,6 @@ class RozetkaStockChecker:
                     '.breadcrumb a',
                     'nav a',
                     '.rz-catalog-breadcrumbs a',
-                    'a[rzrelnofollow].black-link',  # Добавлен селектор для Angular-компонентов
                     'a[href*="/c"]'
                 ]
                 
@@ -339,11 +302,9 @@ class RozetkaStockChecker:
                         elements = soup.select(selector)
                         for element in elements:
                             href = element.get('href', '')
-                            # Шукаємо точний збіг category_id в URL
                             if re.search(rf'/c{category_id}(?:/|$)', href):
                                 text = element.get_text(strip=True)
                                 if text and len(text) > 2 and len(text) < 100:
-                                    # Фільтруємо технічні елементи
                                     if not any(skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']):
                                         if self.debug:
                                             print(f"[parse_category] Знайдено в breadcrumbs: '{text}'")
@@ -353,7 +314,6 @@ class RozetkaStockChecker:
                             print(f"[parse_category] Помилка breadcrumb селектора {selector}: {e}")
                         continue
                 
-                # Альтернативні селектори для категорій
                 category_selectors = [
                     f'a[href*="/c{category_id}/"]',
                     f'a[href*="/ua/c{category_id}/"]',
@@ -376,7 +336,6 @@ class RozetkaStockChecker:
                             print(f"[parse_category] Помилка селектора {selector}: {e}")
                         continue
             
-            # Regex пошук як останній варіант
             regex_patterns = [
                 rf'<a[^>]+href="[^"]*/?c{category_id}/[^"]*"[^>]*>([^<]+)</a>',
                 rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>([^<]*?)</a>',
@@ -391,7 +350,7 @@ class RozetkaStockChecker:
                         text = re.sub(r'<[^>]+>', '', match.group(1)).strip()
                         text = re.sub(r'\s+', ' ', text)
                         if text and len(text) > 2 and len(text) < 100:
-                            if not any(skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']): 
+                            if not any(skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']):
                                 if self.debug:
                                     print(f"[parse_category] Знайдено regex: '{text}'")
                                 return text
@@ -416,7 +375,6 @@ class RozetkaStockChecker:
         category_name = None
         original_url = product_url
         
-        # Спочатку намагаємося отримати дані з API відповіді корзини
         if add_data:
             goods_items = add_data.get('purchases', {}).get('goods')
             if goods_items:
@@ -426,23 +384,19 @@ class RozetkaStockChecker:
                         title = goods.get('title') or goods.get('name') or None
                         category_id = goods.get('category_id') or None
                         
-                        # Очищаем название от лишних символов
                         if title:
                             title = re.sub(r'\s+', ' ', title).strip()
                         
-                        # Оновлюємо URL якщо є кращий варіант
                         api_url = goods.get('href') or goods.get('url')
                         if api_url and api_url.startswith('http'):
                             product_url = api_url
                         break
         
-        # Якщо не вдалося отримати з API, пробуємо парсинг HTML
         if not title or not category_id:
             try:
                 resp = self.scraper.get(original_url, timeout=15)
                 html = resp.text
                 
-                # Поиск названия товара
                 if not title and _HAVE_BS4:
                     soup = BeautifulSoup(html, 'html.parser')
                     
@@ -467,16 +421,13 @@ class RozetkaStockChecker:
                         except:
                             continue
                 
-                # Поиск category_id если не найден в API
                 if not category_id:
-                    # Шукаємо в поточному URL
                     for url_to_check in [product_url, original_url]:
                         match = re.search(r'/c(\d+)/', url_to_check)
                         if match:
                             category_id = int(match.group(1))
                             break
                     
-                    # Дополнительный поиск в HTML
                     if not category_id:
                         category_patterns = [
                             r'"category_id"\s*:\s*(\d+)',
@@ -498,29 +449,22 @@ class RozetkaStockChecker:
                 if self.debug:
                     print(f"[get_product_meta] Помилка парсингу HTML: {e}")
         
-        # Отримуємо назву категорії більш детально
         if category_id is not None:
-            # Спочатку пробуємо отримати з breadcrumbs
             category_name = self.get_category_from_breadcrumbs(product_url, category_id)
             
-            # Якщо не вдалося, пробуємо загальний парсинг
             if not category_name:
                 category_name = self.parse_category_from_html(product_url, category_id)
             
-            # Якщо все ще не вдалося, пробуємо API Rozetka
             if not category_name:
                 category_name = self.get_category_from_api(category_id)
                 
-            # Останній fallback
             if not category_name:
                 category_name = f"Категорія #{category_id}"
         
-        # Остання перевірка та очистка даних
         if title:
             title = title[:200]
         if category_name:
             category_name = category_name[:100]
-            # Видаляємо технічні символи
             category_name = re.sub(r'[<>{}"\']', '', category_name).strip()
             
         if self.debug:
@@ -542,14 +486,12 @@ class RozetkaStockChecker:
                 link = soup.select_one('a[rzrelnofollow].black-link')
                 
                 if link:
-                    # Извлекаем текст, исключая SVG и другие элементы
                     text_content = []
                     for text_node in link.find_all(text=True):
                         text = text_node.strip()
                         if text and not text.startswith('icon-') and len(text) > 2:
                             text_content.append(text)
                     
-                    # Объединяем и очищаем текст
                     full_text = ' '.join(text_content).strip()
                     full_text = re.sub(r'\s+', ' ', full_text)
                     
@@ -567,8 +509,38 @@ class RozetkaStockChecker:
         
         return None
 
+    def get_category_from_api(self, category_id):
+        """Спроба отримати категорію через API Rozetka"""
+        try:
+            api_url = f"https://common-api.rozetka.com.ua/v2/fat-menu/full?country=UA&lang=ua"
+            resp = self.scraper.get(api_url, timeout=10)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                
+                def find_category_recursive(items, target_id):
+                    for item in items:
+                        if item.get('id') == target_id:
+                            return item.get('title', item.get('name', ''))
+                        
+                        children = item.get('children', [])
+                        if children:
+                            result = find_category_recursive(children, target_id)
+                            if result:
+                                return result
+                    return None
+                
+                result = find_category_recursive(data.get('data', []), category_id)
+                if result:
+                    return result
+                    
+        except Exception as e:
+            if self.debug:
+                print(f"[get_category_from_api] Помилка: {e}")
+        
+        return None
+
     def check_product(self, product_url):
-        # ВАЖЛИВО: Очищаємо стан перед перевіркою кожного товару
         self.reset_session_state()
         
         product_id = self.extract_product_id(product_url)
@@ -594,11 +566,8 @@ class RozetkaStockChecker:
         print(f"✅ Результат для товару {product_id}: {max_stock} шт. | {title or 'Без назви'}")
         return result
 
-
-# Решта коду залишається без змін...
 EXCEL_FILENAME = "rozetka_stock_history.xlsx"
 EXCEL_FIELDS = ["name", "url", "category", "last_checked", "max_stock"]
-
 
 def load_existing_excel(path: str):
     """Загружает данные из Excel в список словарей"""
@@ -610,7 +579,6 @@ def load_existing_excel(path: str):
         workbook = load_workbook(path, read_only=True)
         worksheet = workbook.active
         
-        # Читаем заголовки из первой строки
         headers = []
         for cell in worksheet[1]:
             if cell.value:
@@ -621,10 +589,9 @@ def load_existing_excel(path: str):
         if not headers:
             return []
         
-        # Читаем данные
         data = []
         for row in worksheet.iter_rows(min_row=2, values_only=True):
-            if not any(row):  # Пропускаем пустые строки
+            if not any(row):
                 continue
             
             row_dict = {}
@@ -632,7 +599,6 @@ def load_existing_excel(path: str):
                 if i < len(headers):
                     row_dict[headers[i]] = value if value is not None else ''
                     
-            # Добавляем недостающие поля
             for field in EXCEL_FIELDS:
                 if field not in row_dict:
                     row_dict[field] = ''
@@ -647,15 +613,12 @@ def load_existing_excel(path: str):
         print("Створюємо новий файл...")
         return []
 
-
-
 def save_excel_with_formatting(path: str, data_list):
     """Сохраняет список словарей в Excel с форматированием"""
     if not data_list:
         print("[ПОПЕРЕДЖЕННЯ] Список даних порожній, створюємо файл тільки з заголовками")
         data_list = []
     
-    # Группируем данные по товарам и собираем историю
     products_history = {}
     all_dates = set()
     
@@ -682,7 +645,6 @@ def save_excel_with_formatting(path: str, data_list):
     ws = wb.active
     ws.title = "Істория залишків"
 
-    # Заголовки
     headers = ["Назва", "URL", "Категорія"] + sorted_dates
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_num, value=header)
@@ -697,28 +659,23 @@ def save_excel_with_formatting(path: str, data_list):
             bottom=Side(style='thin')
         )
 
-    # Данные
     row_num = 2
     for product_data in products_history.values():
-        # Название товара
         cell = ws.cell(row=row_num, column=1, value=product_data['name'])
         cell.font = Font(name='Arial', size=11)
         cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
-        # URL
         cell = ws.cell(row=row_num, column=2, value=product_data['url'])
         cell.font = Font(name='Arial', size=11)
         cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
-        # Категория
         cell = ws.cell(row=row_num, column=3, value=product_data['category'])
         cell.font = Font(name='Arial', size=11)
         cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
-        # Данные по датам
         for col_idx, date in enumerate(sorted_dates, 4):
             stock_value = product_data['dates'].get(date, '')
             cell = ws.cell(row=row_num, column=col_idx, value=stock_value)
@@ -727,37 +684,30 @@ def save_excel_with_formatting(path: str, data_list):
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
             
-            # Цветовое кодирование
             if stock_value and stock_value > 0:
                 cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
             elif stock_value == 0:
                 cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
             
-            # Чередование строк
             if row_num % 2 == 0:
                 if not cell.fill.start_color or cell.fill.start_color.rgb == '00000000':
                     cell.fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
         
         row_num += 1
 
-    # Настройка ширины столбцов
-    ws.column_dimensions['A'].width = 40  # Название товара
-    ws.column_dimensions['B'].width = 60  # URL
-    ws.column_dimensions['C'].width = 25  # Категория
+    ws.column_dimensions['A'].width = 40
+    ws.column_dimensions['B'].width = 60
+    ws.column_dimensions['C'].width = 25
     
-    # Для столбцов с датами
     for col_idx in range(4, len(headers) + 1):
         col_letter = openpyxl.utils.get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 12
 
-    # Высота строк
     for row in ws.iter_rows():
         ws.row_dimensions[row[0].row].height = 25
 
-    # Закрепляем первую строку
     ws.freeze_panes = 'A2'
     
-    # Автофильтр
     max_row = len(products_history) + 1
     max_col = len(headers)
     ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(max_col)}{max_row}"
@@ -788,15 +738,12 @@ def upsert_rows(existing_data, new_items):
     if not existing_data:
         existing_data = []
     
-    # Удаляем старые записи для тех же URL
     new_urls = [row['url'] for row in new_rows]
     filtered_existing = [row for row in existing_data if row.get('url', '') not in new_urls]
     
-    # Добавляем новые записи
     filtered_existing.extend(new_rows)
     
     return filtered_existing
-
 
 def read_urls_from_file(fname):
     urls = []
@@ -808,51 +755,7 @@ def read_urls_from_file(fname):
             urls.append(line)
     return urls
 
-
 def get_interactive_urls():
-    print("\n" + "="*70)
-    print("🛒 ROZETKA STOCK CHECKER - Інтерактивний режим")
-    print("="*70)
-    print("📝 Введіть URL товарів для перевірки залишків:")
-    print("   • Вводьте по одному URL в рядку")
-    print("   • Для завершення натисніть Enter на порожньому рядку")
-    print("   • Для виходу введіть 'exit' або 'quit'")
-    print("-"*70)
-    
-    urls = []
-    counter = 1
-    
-    while True:
-        try:
-            url = input(f"🔗 URL №{counter}: ").strip()
-            
-            if not url:
-                if urls:
-                    print(f"\n✅ Введено {len(urls)} URL(s). Починаємо перевірку...")
-                    break
-                else:
-                    print("❌ Не введено жодного URL. Спробуйте ще раз.")
-                    continue
-            
-            if url.lower() in ['exit', 'quit', 'вихід']:
-                print("👋 Вихід з програми...")
-                sys.exit(0)
-            
-            if url.startswith('http') and 'rozetka.com.ua' in url:
-                urls.append(url)
-                print(f"   ✓ URL №{counter} додано")
-                counter += 1
-            else:
-                print("   ❌ URL має починатися з http:// або https:// та містити rozetka.com.ua")
-                
-        except KeyboardInterrupt:
-            print("\n\n👋 Програма перервана користувачем")
-            sys.exit(0)
-    
-    return urls
-
-def get_interactive_urls():
-    # Проверяем, запущены ли мы в интерактивном терминале
     if not sys.stdin.isatty():
         print("❌ Интерактивный режим недоступен в неинтерактивной среде")
         print("💡 Используйте аргументы командной строки или файл с URL")
@@ -911,7 +814,6 @@ def parse_cli():
     p.add_argument('--delay', type=float, default=0.7, help='Затримка між запитами під час бінарного пошуку')
     return p.parse_args()
 
-
 def main():
     print("🚀 Запуск Rozetka Stock Checker...")
     
@@ -943,7 +845,7 @@ def main():
         
         if i < len(urls):
             print("⏱️  Пауза між запитами...")
-            time.sleep(2)  # Збільшено паузу між товарами
+            time.sleep(2)
 
     existing = load_existing_excel(EXCEL_FILENAME)
     merged = upsert_rows(existing, results)
@@ -957,7 +859,6 @@ def main():
     print(f"📈 Всього записів в таблиці: {len(merged)}")
     print("-"*70)
     
-
     success_count = 0
     for item in results:
         if 'error' in item:
@@ -972,7 +873,6 @@ def main():
     
     print("="*70)
     print(f"🎉 Успішно оброблено: {success_count}/{len(results)} товарів")
-
 
 if __name__ == '__main__':
     main()
