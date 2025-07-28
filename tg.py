@@ -527,29 +527,114 @@ class RozetkaStockChecker:
         return title, category_name
 
     def get_category_from_breadcrumbs(self, product_url, category_id):
-        """Отримання категорії з breadcrumbs"""
+        """Отримання категорії з breadcrumbs з покращеним парсингом"""
         try:
-            resp = self.scraper.get(product_url, timeout=10)
+            resp = self.scraper.get(product_url, timeout=15)
             html = resp.text
+            
+            if self.debug:
+                print(f"[breadcrumbs] Шукаємо категорію ID: {category_id}")
             
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # Шукаємо breadcrumbs
-                breadcrumb_containers = soup.select('.breadcrumbs, .rz-breadcrumbs, [data-testid="breadcrumbs"]')
+                # Розширені селектори для breadcrumbs
+                breadcrumb_selectors = [
+                    '.breadcrumbs a',
+                    '.rz-breadcrumbs a',
+                    '[data-testid="breadcrumbs"] a', 
+                    '.catalog-heading a',
+                    '.breadcrumb a',
+                    'nav a',
+                    '.rz-catalog-breadcrumbs a',
+                    # Додаємо селектори для Angular компонентів
+                    'a[rzrelnofollow]',
+                    'a.black-link',
+                    'a[href*="/c"]'
+                ]
                 
-                for container in breadcrumb_containers:
-                    links = container.select('a')
-                    for link in links:
-                        href = link.get('href', '')
-                        if f'/c{category_id}/' in href:
-                            text = link.get_text(strip=True)
-                            if text and len(text) > 2 and len(text) < 50:
-                                return text
+                for selector in breadcrumb_selectors:
+                    try:
+                        links = soup.select(selector)
+                        for link in links:
+                            href = link.get('href', '')
+                            
+                            # Перевіряємо чи містить наш category_id
+                            if f'/c{category_id}/' in href or f'c{category_id}' in href:
+                                # Отримуємо текст, очищаючи від SVG та інших елементів
+                                text_content = []
                                 
+                                # Проходимо по всіх текстових вузлах
+                                for text_node in link.find_all(text=True):
+                                    text = text_node.strip()
+                                    # Пропускаємо порожні рядки та технічні елементи
+                                    if text and not text.startswith('icon-') and len(text) > 2:
+                                        text_content.append(text)
+                                
+                                # Об'єднуємо текст
+                                full_text = ' '.join(text_content).strip()
+                                
+                                # Очищаємо від зайвих символів
+                                full_text = re.sub(r'\s+', ' ', full_text)
+                                full_text = re.sub(r'^[^\w]*|[^\w]*$', '', full_text)  # Видаляємо символи на початку/кінці
+                                
+                                if full_text and len(full_text) > 2 and len(full_text) < 100:
+                                    # Додаткова перевірка що це не технічний текст
+                                    if not any(skip in full_text.lower() for skip in [
+                                        'svg', 'icon', 'chevron', 'use', 'href', 'assets', 'sprite'
+                                    ]):
+                                        if self.debug:
+                                            print(f"[breadcrumbs] Знайдено категорію: '{full_text}' в {href}")
+                                        return full_text
+                                
+                    except Exception as e:
+                        if self.debug:
+                            print(f"[breadcrumbs] Помилка селектора {selector}: {e}")
+                        continue
+            
+            # Якщо BeautifulSoup не допоміг, пробуємо regex
+            regex_patterns = [
+                # Для Angular компонентів з rzrelnofollow
+                rf'<a[^>]*rzrelnofollow[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>(?:(?!</a>).)*?([^<>{{}}]+?)(?:(?!</a>).)*?</a>',
+                # Звичайні посилання
+                rf'<a[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>([^<]+)</a>',
+                # Більш складні випадки з вкладеними тегами
+                rf'<a[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>(.*?)</a>',
+            ]
+            
+            for pattern in regex_patterns:
+                try:
+                    matches = re.finditer(pattern, html, re.I | re.S)
+                    for match in matches:
+                        raw_text = match.group(1)
+                        
+                        # Видаляємо HTML теги
+                        clean_text = re.sub(r'<[^>]+>', '', raw_text)
+                        # Видаляємо зайві пробіли
+                        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+                        # Видаляємо спеціальні символи на початку/кінці
+                        clean_text = re.sub(r'^[^\w\u0400-\u04FF]*|[^\w\u0400-\u04FF]*$', '', clean_text)
+                        
+                        if clean_text and len(clean_text) > 2 and len(clean_text) < 100:
+                            # Перевіряємо що це не технічний текст
+                            if not any(skip in clean_text.lower() for skip in [
+                                'svg', 'icon', 'chevron', 'use', 'href', 'assets', 'sprite', 'ng-', 'function'
+                            ]):
+                                if self.debug:
+                                    print(f"[breadcrumbs] Знайдено regex: '{clean_text}'")
+                                return clean_text
+                                
+                except Exception as e:
+                    if self.debug:
+                        print(f"[breadcrumbs] Помилка regex: {e}")
+                    continue
+            
+            if self.debug:
+                print(f"[breadcrumbs] Категорію для ID {category_id} не знайдено")
+                
         except Exception as e:
             if self.debug:
-                print(f"[get_category_from_breadcrumbs] Помилка: {e}")
+                print(f"[breadcrumbs] Загальна помилка: {e}")
         
         return None
 
