@@ -30,9 +30,18 @@ except ImportError:
 
 class RozetkaStockChecker:
     def __init__(self, debug=False, delay=0.7):
-        self.scraper = cloudscraper.create_scraper()
+        self.scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False,
+                'desktop': True
+            },
+            delay=10,
+            interpreter='js2py'
+        )
         self.base_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,uk;q=0.6',
             'Content-Type': 'application/json',
@@ -42,7 +51,6 @@ class RozetkaStockChecker:
         }
         self.debug = debug
         self.delay = delay
-        # ВАЖЛИВО: Ініціалізуємо ці змінні для кожного товару
         self.reset_session_state()
 
     def reset_session_state(self):
@@ -54,33 +62,40 @@ class RozetkaStockChecker:
 
     def get_csrf_token(self):
         try:
-            # Сначала делаем запрос на главную страницу
-            resp = self.scraper.get('https://rozetka.com.ua/')
-            
-            # Проверяем куки
+            # Make request with additional headers to mimic a browser
+            headers = self.base_headers.copy()
+            headers.update({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Fetch-Dest': 'document',
+                'Upgrade-Insecure-Requests': '1'
+            })
+            resp = self.scraper.get('https://rozetka.com.ua/', headers=headers, timeout=10)
+            resp.raise_for_status()
+
+            # Check cookies
             cookies = self.scraper.cookies.get_dict()
             if self.debug:
-                print("[ДЕБАГ] Все кукі:", cookies)
-            
-            # Пробуем разные варианты имен токена
+                print("[ДЕБАГ] Все куки:", cookies)
+
             possible_csrf_names = ['_uss-csrf', 'csrf-token', 'X-CSRF-TOKEN', 'csrf_token', '_token']
-            
             for csrf_name in possible_csrf_names:
                 if csrf_name in cookies:
                     self.csrf_token = cookies[csrf_name]
                     if self.debug:
                         print(f"[ДЕБАГ] Найден CSRF токен '{csrf_name}': {self.csrf_token}")
                     return True
-            
-            # Если в куки не нашли, пробуем найти в HTML
+
+            # Parse HTML for token
             html = resp.text
             csrf_patterns = [
                 r'name="csrf-token"\s+content="([^"]+)"',
                 r'"csrf_token"\s*:\s*"([^"]+)"',
                 r'_uss-csrf["\']?\s*[:=]\s*["\']([^"\']+)',
-                r'csrfToken["\']?\s*[:=]\s*["\']([^"\']+)'
+                r'csrfToken["\']?\s*[:=]\s*["\']([^"\']+)',
+                r'meta\[name=["\']?_?csrf[-_]?token["\']?\]\s*content=["\']([^"\']+)["\']'
             ]
-            
             for pattern in csrf_patterns:
                 match = re.search(pattern, html, re.I)
                 if match:
@@ -88,6 +103,26 @@ class RozetkaStockChecker:
                     if self.debug:
                         print(f"[ДЕБАГ] CSRF токен найден в HTML: {self.csrf_token}")
                     return True
+
+            # Try API request to set cookies
+            test_url = 'https://uss.rozetka.com.ua/session/cart-se/clear?country=UA&lang=ua'
+            test_resp = self.scraper.post(test_url, json={}, headers=self.base_headers, timeout=10)
+            cookies = self.scraper.cookies.get_dict()
+            for csrf_name in possible_csrf_names:
+                if csrf_name in cookies:
+                    self.csrf_token = cookies[csrf_name]
+                    if self.debug:
+                        print(f"[ДЕБАГ] CSRF токен получен после тестового запроса: {self.csrf_token}")
+                    return True
+
+            if self.debug:
+                print("[ДЕБАГ] CSRF токен не найден")
+            return False
+
+        except Exception as e:
+            if self.debug:
+                print(f"[CSRF] Помилка: {e}")
+            return False
             
             # Если ничего не нашли, попробуем сделать запрос к API без токена
             # Иногда первый запрос может установить нужные куки
