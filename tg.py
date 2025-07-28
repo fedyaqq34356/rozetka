@@ -529,7 +529,7 @@ class RozetkaStockChecker:
         return title, category_name
 
     def get_category_from_breadcrumbs(self, product_url, category_id):
-        """Отримання категорії з breadcrumbs з покращеним парсингом"""
+        """Отримання категорії з breadcrumbs для тега з rzrelnofollow і black-link"""
         try:
             resp = self.scraper.get(product_url, timeout=15)
             html = resp.text
@@ -539,133 +539,31 @@ class RozetkaStockChecker:
             
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
+                link = soup.select_one('a[rzrelnofollow].black-link')
                 
-                # Розширені селектори для breadcrumbs
-                breadcrumb_selectors = [
-                    '.breadcrumbs a',
-                    '.rz-breadcrumbs a',
-                    '[data-testid="breadcrumbs"] a',
-                    '.catalog-heading a',
-                    '.breadcrumb a',
-                    'nav a',
-                    '.rz-catalog-breadcrumbs a',
-                    'a[rzrelnofollow].black-link',  # Добавлен селектор для Angular-компонентов
-                    'a[href*="/c"]'
-                ]
-                
-                for selector in breadcrumb_selectors:
-                    try:
-                        links = soup.select(selector)
-                        for link in links:
-                            href = link.get('href', '')
-                            
-                            # Перевіряємо чи містить наш category_id
-                            if f'/c{category_id}/' in href or f'c{category_id}' in href:
-                                # Отримуємо текст, очищаючи від SVG та інших елементів
-                                text_content = []
-                                
-                                # Проходимо по всіх текстових вузлах
-                                for text_node in link.find_all(text=True):
-                                    text = text_node.strip()
-                                    # Пропускаємо порожні рядки та технічні елементи
-                                    if text and not text.startswith('icon-') and len(text) > 2:
-                                        text_content.append(text)
-                                
-                                # Об'єднуємо текст
-                                full_text = ' '.join(text_content).strip()
-                                
-                                # Очищаємо від зайвих символів
-                                full_text = re.sub(r'\s+', ' ', full_text)
-                                full_text = re.sub(r'^[^\w]*|[^\w]*$', '', full_text)  # Видаляємо символи на початку/кінці
-                                
-                                if full_text and len(full_text) > 2 and len(full_text) < 100:
-                                    # Додаткова перевірка що це не технічний текст
-                                    if not any(skip in full_text.lower() for skip in [
-                                        'svg', 'icon', 'chevron', 'use', 'href', 'assets', 'sprite'
-                                    ]):
-                                        if self.debug:
-                                            print(f"[breadcrumbs] Знайдено категорію: '{full_text}' в {href}")
-                                        return full_text
-                                
-                    except Exception as e:
+                if link:
+                    # Извлекаем текст, исключая SVG и другие элементы
+                    text_content = []
+                    for text_node in link.find_all(text=True):
+                        text = text_node.strip()
+                        if text and not text.startswith('icon-') and len(text) > 2:
+                            text_content.append(text)
+                    
+                    # Объединяем и очищаем текст
+                    full_text = ' '.join(text_content).strip()
+                    full_text = re.sub(r'\s+', ' ', full_text)
+                    
+                    if full_text and len(full_text) > 2 and len(full_text) < 100:
                         if self.debug:
-                            print(f"[breadcrumbs] Помилка селектора {selector}: {e}")
-                        continue
-            
-            # Якщо BeautifulSoup не допоміг, пробуємо regex
-            regex_patterns = [
-                # Для Angular компонентів з rzrelnofollow
-                rf'<a[^>]*rzrelnofollow[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>(?:(?!</a>).)*?([^<>{{}}]+?)(?:(?!</a>).)*?</a>',
-                # Звичайні посилання
-                rf'<a[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>([^<]+)</a>',
-                # Більш складні випадки з вкладеними тегами
-                rf'<a[^>]*href="[^"]*c{category_id}[^"]*"[^>]*>(.*?)</a>',
-            ]
-            
-            for pattern in regex_patterns:
-                try:
-                    matches = re.finditer(pattern, html, re.I | re.S)
-                    for match in matches:
-                        raw_text = match.group(1)
-                        
-                        # Видаляємо HTML теги
-                        clean_text = re.sub(r'<[^>]+>', '', raw_text)
-                        # Видаляємо зайві пробіли
-                        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
-                        # Видаляємо спеціальні символи на початку/кінці
-                        clean_text = re.sub(r'^[^\w\u0400-\u04FF]*|[^\w\u0400-\u04FF]*$', '', clean_text)
-                        
-                        if clean_text and len(clean_text) > 2 and len(clean_text) < 100:
-                            # Перевіряємо що це не технічний текст
-                            if not any(skip in clean_text.lower() for skip in [
-                                'svg', 'icon', 'chevron', 'use', 'href', 'assets', 'sprite', 'ng-', 'function'
-                            ]):
-                                if self.debug:
-                                    print(f"[breadcrumbs] Знайдено regex: '{clean_text}'")
-                                return clean_text
-                                
-                except Exception as e:
-                    if self.debug:
-                        print(f"[breadcrumbs] Помилка regex: {e}")
-                    continue
+                            print(f"[breadcrumbs] Знайдено категорію: '{full_text}'")
+                        return full_text
             
             if self.debug:
                 print(f"[breadcrumbs] Категорію для ID {category_id} не знайдено")
-                
-        except Exception as e:
-            if self.debug:
-                print(f"[breadcrumbs] Загальна помилка: {e}")
         
-        return None
-
-    def get_category_from_api(self, category_id):
-        """Спроба отримати категорію через API Rozetka"""
-        try:
-            api_url = f"https://common-api.rozetka.com.ua/v2/fat-menu/full?country=UA&lang=ua"
-            resp = self.scraper.get(api_url, timeout=10)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                
-                def find_category_recursive(items, target_id):
-                    for item in items:
-                        if item.get('id') == target_id:
-                            return item.get('title', item.get('name', ''))
-                        
-                        children = item.get('children', [])
-                        if children:
-                            result = find_category_recursive(children, target_id)
-                            if result:
-                                return result
-                    return None
-                
-                result = find_category_recursive(data.get('data', []), category_id)
-                if result:
-                    return result
-                    
         except Exception as e:
             if self.debug:
-                print(f"[get_category_from_api] Помилка: {e}")
+                print(f"[breadcrumbs] Помилка: {e}")
         
         return None
 
