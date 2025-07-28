@@ -719,7 +719,7 @@ class RozetkaTelegramBot:
             if success:
                 stock = result.get('max_stock', 0)
                 
-                # НЕ зберігаємо залишки та НЕ експортуємо в Excel при ручному додаванні
+                # НЕ зберігаємо залишки при ручному додаванні
                 success_text = (
                     f"✅ Товар додано!\n\n"
                     f"📦 <b>{result.get('title', 'Без назви')}</b>\n"
@@ -738,6 +738,7 @@ class RozetkaTelegramBot:
             await processing_msg.edit_text(f"❌ Помилка обробки: {str(e)}")
         
         await state.clear()
+
 
     async def check_all_products(self, manual=False) -> List[Dict]:
         products = self.db.get_products()
@@ -760,8 +761,7 @@ class RozetkaTelegramBot:
                             updated_category
                         )
                     
-                    # Оновлюємо залишки
-# Оновлюємо залишки тільки для автоматичних перевірок
+                    # Оновлюємо залишки тільки для автоматичних перевірок
                     stock_count = result.get('max_stock', 0)
                     if not manual:
                         self.db.update_product_stock(product['id'], stock_count)
