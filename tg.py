@@ -369,12 +369,11 @@ class RozetkaStockChecker:
         return None
 
     def get_product_meta(self, product_url, add_data, product_id):
-        """Покращена функція отримання метаданих товару"""
+        """Получение метаданных товара"""
         title = None
-        category_id = None
         category_name = None
-        original_url = product_url
         
+        # Получаем название из API корзины
         if add_data:
             goods_items = add_data.get('purchases', {}).get('goods')
             if goods_items:
@@ -382,93 +381,53 @@ class RozetkaStockChecker:
                     goods = item.get('goods', {})
                     if goods.get('id') == product_id:
                         title = goods.get('title') or goods.get('name') or None
-                        category_id = goods.get('category_id') or None
-                        
                         if title:
                             title = re.sub(r'\s+', ' ', title).strip()
-                        
-                        api_url = goods.get('href') or goods.get('url')
-                        if api_url and api_url.startswith('http'):
-                            product_url = api_url
                         break
         
-        if not title or not category_id:
-            try:
-                resp = self.scraper.get(original_url, timeout=15)
-                html = resp.text
-                
-                if not title and _HAVE_BS4:
-                    soup = BeautifulSoup(html, 'html.parser')
-                    
-                    title_selectors = [
-                        'h1.product__title',
-                        'h1[data-testid="product-title"]',
-                        '.product-title h1',
-                        'h1.rz-product-title',
-                        '.product__title',
-                        '[data-testid="product-title"]',
-                        'h1'
-                    ]
-                    
-                    for selector in title_selectors:
-                        try:
-                            element = soup.select_one(selector)
-                            if element:
-                                title = element.get_text(strip=True)
-                                if title and len(title) > 5:
-                                    title = re.sub(r'\s+', ' ', title).strip()
-                                    break
-                        except:
-                            continue
-                
-                if not category_id:
-                    for url_to_check in [product_url, original_url]:
-                        match = re.search(r'/c(\d+)/', url_to_check)
-                        if match:
-                            category_id = int(match.group(1))
-                            break
-                    
-                    if not category_id:
-                        category_patterns = [
-                            r'"category_id"\s*:\s*(\d+)',
-                            r'"categoryId"\s*:\s*(\d+)',
-                            r'data-category-id="(\d+)"',
-                            r'category[_-]?id["\']?\s*[:=]\s*["\']?(\d+)'
-                        ]
-                        
-                        for pattern in category_patterns:
-                            match = re.search(pattern, html, re.I)
-                            if match:
-                                try:
-                                    category_id = int(match.group(1))
-                                    break
-                                except:
-                                    continue
-                    
-            except Exception as e:
-                if self.debug:
-                    print(f"[get_product_meta] Помилка парсингу HTML: {e}")
-        
-        if category_id is not None:
-            category_name = self.get_category_from_breadcrumbs(product_url, category_id)
+        # Парсим страницу для получения категории и названия
+        try:
+            resp = self.scraper.get(product_url, timeout=15)
+            html = resp.text
             
-            if not category_name:
-                category_name = self.parse_category_from_html(product_url, category_id)
+            # Получаем название товара если не получили из API
+            if not title and _HAVE_BS4:
+                soup = BeautifulSoup(html, 'html.parser')
+                title_element = soup.select_one('h1')
+                if title_element:
+                    title = title_element.get_text(strip=True)
+                    if title:
+                        title = re.sub(r'\s+', ' ', title).strip()
             
-            if not category_name:
-                category_name = self.get_category_from_api(category_id)
+            # Ищем категорию через regex - ссылку с rzrelnofollow
+            pattern = r'<a[^>]*rzrelnofollow[^>]*class="[^"]*black-link[^"]*"[^>]*>(.*?)</a>'
+            match = re.search(pattern, html, re.I | re.S)
+            
+            if match:
+                content = match.group(1)
+                # Удаляем SVG полностью
+                content = re.sub(r'<svg[^>]*>.*?</svg>', '', content, flags=re.S | re.I)
+                # Получаем чистый текст
+                clean_text = re.sub(r'<[^>]+>', '', content).strip()
+                clean_text = re.sub(r'\s+', ' ', clean_text)
+                # Убираем комментарии HTML
+                clean_text = re.sub(r'<!---->', '', clean_text).strip()
                 
-            if not category_name:
-                category_name = f"Категорія #{category_id}"
+                if clean_text and len(clean_text) > 2:
+                    category_name = clean_text
+                    
+        except Exception as e:
+            if self.debug:
+                print(f"[get_product_meta] Ошибка парсинга: {e}")
         
+        # Очистка данных
         if title:
             title = title[:200]
         if category_name:
             category_name = category_name[:100]
-            category_name = re.sub(r'[<>{}"\']', '', category_name).strip()
-            
+        
         if self.debug:
-            print(f"[get_product_meta] Результат: title='{title}', category='{category_name}', category_id={category_id}")
+            print(f"[get_product_meta] Результат: title='{title}', category='{category_name}'")
             
         return title, category_name
 
