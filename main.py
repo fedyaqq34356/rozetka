@@ -719,13 +719,12 @@ class RozetkaTelegramBot:
             success = self.db.add_product(
                 url=result['url'],
                 name=result.get('title', ''),
-                category=result.get('category', '')
+                category=result.get('category', 'Невідома')  # Явно указываем значение по умолчанию
             )
             
             if success:
                 stock = result.get('max_stock', 0)
                 
-                # НЕ зберігаємо залишки при ручному додаванні
                 success_text = (
                     f"✅ Товар додано!\n\n"
                     f"📦 <b>{result.get('title', 'Без назви')}</b>\n"
@@ -736,6 +735,7 @@ class RozetkaTelegramBot:
                 )
                 
                 await processing_msg.edit_text(success_text, parse_mode="HTML")
+                logger.info(f"Товар додано: {result.get('title', 'Без назви')}, категорія: {result.get('category', 'Невідома')}")
             else:
                 await processing_msg.edit_text("❌ Помилка збереження товару")
                 
