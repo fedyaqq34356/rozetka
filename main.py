@@ -414,13 +414,14 @@ class RozetkaTelegramBot:
 
     async def cmd_manual_check(self, message: Message):
         await message.reply("🔍 Запускаю ручну перевірку залишків...")
-        results = await self.check_products_without_saving()  # Нова функція
+        results = await self.check_products_without_saving()
         
         if results:
             report = "✅ <b>Ручна перевірка завершена!</b>\n\n📊 <b>Результати:</b>\n\n"
             for result in results:
                 report += f"📦 <b>{result['name']}</b>\n"
                 if result['success']:
+                    report += f"   📂 Категорія: {result.get('category', 'Невідома')}\n"
                     report += f"   📈 Залишки: {result['stock']}\n"
                 else:
                     report += f"   ❌ Помилка: {result['error']}\n"
@@ -487,18 +488,22 @@ class RozetkaTelegramBot:
                 result = self.checker.check_product(product['url'])
                 if 'error' not in result:
                     stock_count = result.get('max_stock', 0)
+                    # ИСПРАВЛЕНИЕ: используем данные из result вместо product
                     product_name = result.get('title', product['name'])
+                    category_name = result.get('category', 'Без категории')
                     
                     results.append({
                         'name': product_name or 'Без назви',
+                        'category': category_name or 'Без категории', # Добавляем категорию
                         'success': True,
                         'stock': stock_count
                     })
                     
-                    logger.info(f"Ручна перевірка - Успіх: {product_name}, залишки: {stock_count}")
+                    logger.info(f"Ручна перевірка - Успіх: {product_name}, категория: {category_name}, залишки: {stock_count}")
                 else:
                     results.append({
                         'name': product['name'],
+                        'category': 'Помилка',
                         'success': False,
                         'error': result['error']
                     })
@@ -508,6 +513,7 @@ class RozetkaTelegramBot:
                 logger.error(f"Критична помилка ручної перевірки товару {product['url']}: {e}")
                 results.append({
                     'name': product['name'],
+                    'category': 'Критична помилка',
                     'success': False,
                     'error': str(e)
                 })
