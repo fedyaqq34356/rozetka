@@ -408,9 +408,10 @@ class RozetkaStockChecker:
         return None
 
     def get_product_meta(self, product_url, add_data, product_id):
-        """УЛУЧШЕННАЯ функція отримання метаданих товару"""
+        """Покращена функція отримання метаданих товару"""
         title = None
         category_id = None
+        category_name = None
         original_url = product_url
         
         # Спочатку намагаємося отримати дані з API відповіді корзини
@@ -422,6 +423,7 @@ class RozetkaStockChecker:
                     if goods.get('id') == product_id:
                         title = goods.get('title') or goods.get('name') or None
                         category_id = goods.get('category_id') or None
+                        
                         # Очищаем название от лишних символов
                         if title:
                             title = re.sub(r'\s+', ' ', title).strip()
@@ -442,7 +444,6 @@ class RozetkaStockChecker:
                 if not title and _HAVE_BS4:
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Расширенные селекторы для названия товара
                     title_selectors = [
                         'h1.product__title',
                         'h1[data-testid="product-title"]',
@@ -458,7 +459,7 @@ class RozetkaStockChecker:
                             element = soup.select_one(selector)
                             if element:
                                 title = element.get_text(strip=True)
-                                if title and len(title) > 5:  # Минимальная длина названия
+                                if title and len(title) > 5:
                                     title = re.sub(r'\s+', ' ', title).strip()
                                     break
                         except:
@@ -495,25 +496,93 @@ class RozetkaStockChecker:
                 if self.debug:
                     print(f"[get_product_meta] Помилка парсингу HTML: {e}")
         
-        # Отримуємо назву категорії
-        category_name = None
+        # Отримуємо назву категорії більш детально
         if category_id is not None:
-            category_name = self.parse_category_from_html(product_url, category_id)
+            # Спочатку пробуємо отримати з breadcrumbs
+            category_name = self.get_category_from_breadcrumbs(product_url, category_id)
             
-            # Если не удалось получить название категории, используем fallback
+            # Якщо не вдалося, пробуємо загальний парсинг
+            if not category_name:
+                category_name = self.parse_category_from_html(product_url, category_id)
+            
+            # Якщо все ще не вдалося, пробуємо API Rozetka
+            if not category_name:
+                category_name = self.get_category_from_api(category_id)
+                
+            # Останній fallback
             if not category_name:
                 category_name = f"Категорія #{category_id}"
         
-        # Последняя проверка и очистка данных
+        # Остання перевірка та очистка даних
         if title:
-            title = title[:200]  # Ограничиваем длину
+            title = title[:200]
         if category_name:
-            category_name = category_name[:100]  # Ограничиваем длину
+            category_name = category_name[:100]
+            # Видаляємо технічні символи
+            category_name = re.sub(r'[<>{}"\']', '', category_name).strip()
             
         if self.debug:
             print(f"[get_product_meta] Результат: title='{title}', category='{category_name}', category_id={category_id}")
             
         return title, category_name
+
+    def get_category_from_breadcrumbs(self, product_url, category_id):
+        """Отримання категорії з breadcrumbs"""
+        try:
+            resp = self.scraper.get(product_url, timeout=10)
+            html = resp.text
+            
+            if _HAVE_BS4:
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Шукаємо breadcrumbs
+                breadcrumb_containers = soup.select('.breadcrumbs, .rz-breadcrumbs, [data-testid="breadcrumbs"]')
+                
+                for container in breadcrumb_containers:
+                    links = container.select('a')
+                    for link in links:
+                        href = link.get('href', '')
+                        if f'/c{category_id}/' in href:
+                            text = link.get_text(strip=True)
+                            if text and len(text) > 2 and len(text) < 50:
+                                return text
+                                
+        except Exception as e:
+            if self.debug:
+                print(f"[get_category_from_breadcrumbs] Помилка: {e}")
+        
+        return None
+
+    def get_category_from_api(self, category_id):
+        """Спроба отримати категорію через API Rozetka"""
+        try:
+            api_url = f"https://common-api.rozetka.com.ua/v2/fat-menu/full?country=UA&lang=ua"
+            resp = self.scraper.get(api_url, timeout=10)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                
+                def find_category_recursive(items, target_id):
+                    for item in items:
+                        if item.get('id') == target_id:
+                            return item.get('title', item.get('name', ''))
+                        
+                        children = item.get('children', [])
+                        if children:
+                            result = find_category_recursive(children, target_id)
+                            if result:
+                                return result
+                    return None
+                
+                result = find_category_recursive(data.get('data', []), category_id)
+                if result:
+                    return result
+                    
+        except Exception as e:
+            if self.debug:
+                print(f"[get_category_from_api] Помилка: {e}")
+        
+        return None
 
     def check_product(self, product_url):
         # ВАЖЛИВО: Очищаємо стан перед перевіркою кожного товару
