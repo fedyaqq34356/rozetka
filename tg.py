@@ -54,14 +54,62 @@ class RozetkaStockChecker:
 
     def get_csrf_token(self):
         try:
+            # Сначала делаем запрос на главную страницу
             resp = self.scraper.get('https://rozetka.com.ua/')
+            
+            # Проверяем куки
             cookies = self.scraper.cookies.get_dict()
             if self.debug:
-                print("[ДЕБАГ] Кукі сайту:", cookies)
-            self.csrf_token = cookies.get('_uss-csrf')
+                print("[ДЕБАГ] Все кукі:", cookies)
+            
+            # Пробуем разные варианты имен токена
+            possible_csrf_names = ['_uss-csrf', 'csrf-token', 'X-CSRF-TOKEN', 'csrf_token', '_token']
+            
+            for csrf_name in possible_csrf_names:
+                if csrf_name in cookies:
+                    self.csrf_token = cookies[csrf_name]
+                    if self.debug:
+                        print(f"[ДЕБАГ] Найден CSRF токен '{csrf_name}': {self.csrf_token}")
+                    return True
+            
+            # Если в куки не нашли, пробуем найти в HTML
+            html = resp.text
+            csrf_patterns = [
+                r'name="csrf-token"\s+content="([^"]+)"',
+                r'"csrf_token"\s*:\s*"([^"]+)"',
+                r'_uss-csrf["\']?\s*[:=]\s*["\']([^"\']+)',
+                r'csrfToken["\']?\s*[:=]\s*["\']([^"\']+)'
+            ]
+            
+            for pattern in csrf_patterns:
+                match = re.search(pattern, html, re.I)
+                if match:
+                    self.csrf_token = match.group(1)
+                    if self.debug:
+                        print(f"[ДЕБАГ] CSRF токен найден в HTML: {self.csrf_token}")
+                    return True
+            
+            # Если ничего не нашли, попробуем сделать запрос к API без токена
+            # Иногда первый запрос может установить нужные куки
+            try:
+                test_url = 'https://uss.rozetka.com.ua/session/cart-se/clear?country=UA&lang=ua'
+                test_resp = self.scraper.post(test_url, json={})
+                
+                # Проверяем куки еще раз
+                cookies = self.scraper.cookies.get_dict()
+                for csrf_name in possible_csrf_names:
+                    if csrf_name in cookies:
+                        self.csrf_token = cookies[csrf_name]
+                        if self.debug:
+                            print(f"[ДЕБАГ] CSRF токен получен после тестового запроса: {self.csrf_token}")
+                        return True
+            except:
+                pass
+            
             if self.debug:
-                print(f"[ДЕБАГ] Отримано CSRF токен: {self.csrf_token}")
-            return self.csrf_token is not None
+                print("[ДЕБАГ] CSRF токен не найден")
+            return False
+            
         except Exception as e:
             print(f"[CSRF] Помилка: {e}")
             return False
