@@ -40,7 +40,7 @@ class BotStates(StatesGroup):
 
 # Покращений клас для роботи з Rozetka
 class ImprovedRozetkaChecker(RozetkaStockChecker):
-    def __init__(self, debug=False, delay=0.7):
+    def __init__(self, debug=False, delay=2):
         super().__init__(debug, delay)
 
 # Виправлений клас для роботи з базою даних
@@ -746,39 +746,40 @@ class RozetkaTelegramBot:
         
         await state.clear()
 
-
     async def check_all_products(self, manual=False) -> List[Dict]:
         products = self.db.get_products()
         results = []
-        
+
         for i, product in enumerate(products, 1):
             try:
                 logger.info(f"Перевіряю товар {i}/{len(products)}: {product['name']}")
-                
+
                 result = self.checker.check_product(product['url'])
                 if 'error' not in result:
                     # Оновлюємо інформацію про товар
                     updated_name = result.get('title', product['name'])
                     updated_category = result.get('category', product['category'])
-                    
+
                     if updated_name != product['name'] or updated_category != product['category']:
                         self.db.add_product(
                             product['url'],
                             updated_name,
                             updated_category
                         )
-                    
-                    # Оновлюємо залишки тільки для автоматичних перевірок
+
+                    # ИСПРАВЛЕНИЕ: Обновляем залишки для всех проверок (не только manual)
                     stock_count = result.get('max_stock', 0)
-                    if not manual:
-                        self.db.update_product_stock(product['id'], stock_count)
-                    
+                    product_id = self.db.get_product_id_by_url(product['url'])
+                    if product_id:
+                        self.db.update_product_stock(product_id, stock_count)
+                        logger.info(f"Обновлены остатки для товара {product_id}: {stock_count}")
+
                     results.append({
                         'name': updated_name or 'Без назви',
                         'success': True,
                         'stock': stock_count
                     })
-                    
+
                     logger.info(f"Успіх: {updated_name}, залишки: {stock_count}")
                 else:
                     results.append({
@@ -787,7 +788,7 @@ class RozetkaTelegramBot:
                         'error': result['error']
                     })
                     logger.error(f"Помилка для товару {product['url']}: {result['error']}")
-                    
+
             except Exception as e:
                 logger.error(f"Критична помилка перевірки товару {product['url']}: {e}")
                 results.append({
@@ -795,11 +796,11 @@ class RozetkaTelegramBot:
                     'success': False,
                     'error': str(e)
                 })
-            
+
             # Пауза між товарами
             if i < len(products):
                 await asyncio.sleep(2)
-        
+
         return results
 
 
