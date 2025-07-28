@@ -38,7 +38,7 @@ class RozetkaStockChecker:
             interpreter='js2py'
         )
         self.base_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7,uk;q=0.6',
             'Origin': 'https://rozetka.com.ua',
@@ -261,111 +261,179 @@ class RozetkaStockChecker:
         return max_available, add_data
 
     def parse_category_from_html(self, product_url, category_id):
-        """Простая функция парсинга категории с приоритетом на rz-breadcrumbs и a[rzrelnofollow].black-link"""
+        """Парсинг категории ТОЛЬКО из HTML без API вызовов"""
         try:
-            resp = self.scraper.get(product_url, timeout=15)
+            # Добавляем больше заголовков для сервера
+            headers = self.base_headers.copy()
+            headers.update({
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin'
+            })
+            
+            resp = self.scraper.get(product_url, headers=headers, timeout=20)
             resp.raise_for_status()
             html = resp.text
 
-            # Сохраняем HTML для отладки
+            # Сохраняем HTML для отладки (особенно важно на сервере)
             if self.debug:
-                with open("debug_page.html", "w", encoding="utf-8") as f:
-                    f.write(html)
-                print(f"[parse_category] HTML збережено в debug_page.html для URL: {product_url}")
-
-            if self.debug:
-                print(f"[parse_category] Шукаємо категорію ID: {category_id}")
-
-            # Парсинг через BeautifulSoup
-            if _HAVE_BS4:
-                soup = BeautifulSoup(html, 'html.parser')
-
-                # Прямой поиск по XPath-подобному селектору
-                xpath_selector = 'rz-breadcrumbs div:nth-child(6) a'
-                link = soup.select_one(xpath_selector)
-                if link:
-                    text = link.get_text(strip=True)
-                    if text and 2 < len(text) < 100 and not any(
-                        skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
-                    ):
-                        if self.debug:
-                            print(f"[parse_category] Знайдено в селекторі '{xpath_selector}': '{text}'")
-                        return text
-
-                # Другие селекторы
-                selectors = [
-                    'a[rzrelnofollow].black-link',
-                    'a.black-link[rzrelnofollow]',
-                    'a.d-flex.black-link',
-                    'a[rzrelnofollow][class*="black-link"]',
-                    f'a[href*="/c{category_id}/"]',
-                    f'a[href*="/ua/c{category_id}/"]'
-                ]
-
-                for selector in selectors:
-                    try:
-                        link = soup.select_one(selector)
-                        if link:
-                            text = link.get_text(strip=True)
-                            if text and 2 < len(text) < 100 and not any(
-                                skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
-                            ):
-                                if self.debug:
-                                    print(f"[parse_category] Знайдено в селекторі '{selector}': '{text}'")
-                                return text
-                    except Exception as e:
-                        if self.debug:
-                            print(f"[parse_category] Помилка селектора '{selector}': {e}")
-                        continue
-
-            # Резервный поиск через regex
-            regex_patterns = [
-                rf'<a[^>]+href="[^"]*/?c{category_id}/[^"]*"[^>]*>([^<]+)</a>',
-                rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>([^<]*?)</a>',
-                rf'"name"\s*:\s*"([^"]*)"[^}}]*"categoryId"\s*:\s*"?{category_id}"?',
-                rf'"title"\s*:\s*"([^"]*)"[^}}]*"id"\s*:\s*"?{category_id}"?'
-            ]
-
-            for pattern in regex_patterns:
+                debug_file = f"debug_server_{category_id}.html"
                 try:
-                    matches = re.finditer(pattern, html, re.I | re.S)
-                    for match in matches:
-                        text = re.sub(r'<[^>]+>', '', match.group(1)).strip()
-                        text = re.sub(r'\s+', ' ', text)
-                        if text and 2 < len(text) < 100 and not any(
-                            skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']
-                        ):
+                    with open(debug_file, "w", encoding="utf-8") as f:
+                        f.write(html)
+                    print(f"[parse_category] HTML сохранен в {debug_file}")
+                    print(f"[parse_category] Размер HTML: {len(html)} символов")
+                except Exception as e:
+                    print(f"[parse_category] Не удалось сохранить HTML: {e}")
+
+            if self.debug:
+                print(f"[parse_category] Ищем категорию ID: {category_id} для URL: {product_url}")
+                print(f"[parse_category] Статус ответа: {resp.status_code}")
+
+            # Проверяем, есть ли BeautifulSoup
+            if _HAVE_BS4:
+                try:
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # ПРИОРИТЕТНЫЕ селекторы (в порядке важности)
+                    priority_selectors = [
+                        # Специфичный селектор для 6-го элемента breadcrumbs
+                        'rz-breadcrumbs div:nth-child(6) a',
+                        'rz-breadcrumbs > div:nth-child(6) > a',
+                        '.rz-breadcrumbs div:nth-child(6) a',
+                        
+                        # Селекторы для rzrelnofollow и black-link
+                        'a[rzrelnofollow].black-link',
+                        'a.black-link[rzrelnofollow]',
+                        'a[rzrelnofollow][class*="black-link"]',
+                        
+                        # Селекторы по category_id в href
+                        f'a[href*="/c{category_id}/"]',
+                        f'a[href*="/ua/c{category_id}/"]',
+                        f'a[href*="c{category_id}"]',
+                        
+                        # Дополнительные breadcrumb селекторы
+                        'nav[aria-label="breadcrumb"] a',
+                        '.breadcrumb a',
+                        '.breadcrumbs a',
+                        'ol.breadcrumb a',
+                        'ul.breadcrumb a'
+                    ]
+
+                    for selector in priority_selectors:
+                        try:
+                            elements = soup.select(selector)
                             if self.debug:
-                                print(f"[parse_category] Знайдено regex: '{text}'")
-                            return text
+                                print(f"[parse_category] Селектор '{selector}' нашел {len(elements)} элементов")
+                            
+                            for element in elements:
+                                # Проверяем href на соответствие category_id
+                                href = element.get('href', '')
+                                if category_id and f'c{category_id}' not in href:
+                                    continue
+                                    
+                                text = element.get_text(strip=True)
+                                
+                                # Фильтруем плохой текст
+                                if (text and 
+                                    2 < len(text) < 100 and 
+                                    not any(skip in text.lower() for skip in 
+                                        ['>', '<', 'img', 'svg', 'icon', 'span', 'function', 'script']) and
+                                    not re.search(r'^[\s\n\r]*$', text) and
+                                    text not in ['Головна', 'Главная', 'Home', 'Rozetka']):
+                                    
+                                    if self.debug:
+                                        print(f"[parse_category] ✓ Найдено через '{selector}': '{text}'")
+                                    return text
+                                elif self.debug and text:
+                                    print(f"[parse_category] ✗ Отфильтровано '{selector}': '{text}' (длина: {len(text)})")
+                                    
+                        except Exception as e:
+                            if self.debug:
+                                print(f"[parse_category] Ошибка селектора '{selector}': {e}")
+                            continue
+                            
                 except Exception as e:
                     if self.debug:
-                        print(f"[parse_category] Помилка pattern: {e}")
-                        continue
+                        print(f"[parse_category] Ошибка BeautifulSoup: {e}")
 
-            # Резервный вызов API
-            category_name = self.get_category_from_api(category_id)
-            if category_name:
-                if self.debug:
-                    print(f"[parse_category] Знайдено через API: '{category_name}'")
-                return category_name
+            # Усиленный regex поиск (фолбэк)
+            regex_patterns = [
+                # Более точные паттерны для категорий
+                rf'<a[^>]+href="[^"]*/?c{category_id}/[^"]*"[^>]*>\s*([^<]+?)\s*</a>',
+                rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>\s*([^<]*?)\s*</a>',
+                
+                # Breadcrumbs паттерны
+                rf'breadcrumb[^>]*>[^<]*<[^>]*href[^>]*c{category_id}[^>]*>([^<]+)</a>',
+                rf'rz-breadcrumbs[^>]*>[^<]*<[^>]*href[^>]*c{category_id}[^>]*>([^<]+)</a>',
+                
+                # JSON в HTML (часто встречается)
+                rf'"text"\s*:\s*"([^"]+)"[^}}{{]*"href"[^}}{{]*c{category_id}',
+                rf'"title"\s*:\s*"([^"]+)"[^}}{{]*"url"[^}}{{]*c{category_id}'
+            ]
 
+            for i, pattern in enumerate(regex_patterns):
+                try:
+                    matches = re.finditer(pattern, html, re.I | re.S)
+                    found_matches = list(matches)
+                    
+                    if self.debug:
+                        print(f"[parse_category] Regex паттерн {i+1} нашел {len(found_matches)} совпадений")
+                    
+                    for match in found_matches:
+                        text = re.sub(r'<[^>]+>', '', match.group(1)).strip()
+                        text = re.sub(r'\s+', ' ', text)
+                        text = re.sub(r'[^\w\s\-\u0400-\u04FF]', '', text).strip()
+                        
+                        if (text and 
+                            2 < len(text) < 100 and 
+                            not any(skip in text.lower() for skip in 
+                                ['function', 'script', 'style', '{', '}', 'var ', 'const ', 'let ']) and
+                            text not in ['Головна', 'Главная', 'Home', 'Rozetka']):
+                            
+                            if self.debug:
+                                print(f"[parse_category] ✓ Найдено regex {i+1}: '{text}'")
+                            return text
+                        elif self.debug and text:
+                            print(f"[parse_category] ✗ Отфильтровано regex {i+1}: '{text}'")
+                            
+                except Exception as e:
+                    if self.debug:
+                        print(f"[parse_category] Ошибка regex паттерна {i+1}: {e}")
+                    continue
+
+            # Если ничего не найдено, возвращаем общее значение
             if self.debug:
-                print(f"[parse_category] Категорію з ID {category_id} не знайдено")
+                print(f"[parse_category] ✗ Категория с ID {category_id} НЕ найдена")
+                print("[parse_category] Возвращаем 'Невідома категорія'")
 
-            return None
+            return "Невідома категорія"
+            
         except Exception as e:
             if self.debug:
-                print(f"[parse_category] Загальна помилка: {e}")
-            return None
+                print(f"[parse_category] КРИТИЧЕСКАЯ ошибка: {e}")
+                import traceback
+                traceback.print_exc()
+            return "Помилка отримання категорії"
 
     def get_product_meta(self, product_url, add_data, product_id):
-        """ВИПРАВЛЕНА функція отримання метаданих товару"""
+        """ИСПРАВЛЕННАЯ функция получения метаданных товара с дополнительной отладкой"""
         title = None
         category_id = None
         original_url = product_url
         
-        # Спочатку намагаємося отримати дані з API відповіді корзини
+        if self.debug:
+            print(f"[get_product_meta] Обрабатываем товар ID: {product_id}")
+            print(f"[get_product_meta] URL: {product_url}")
+            print(f"[get_product_meta] Есть add_data: {add_data is not None}")
+        
+        # Сначала пытаемся получить данные из API ответа корзины
         if add_data:
             goods_items = add_data.get('purchases', {}).get('goods')
             if goods_items:
@@ -374,95 +442,124 @@ class RozetkaStockChecker:
                     if goods.get('id') == product_id:
                         title = goods.get('title') or goods.get('name') or None
                         category_id = goods.get('category_id') or None
-                        # Оновлюємо URL якщо є кращий варіант
+                        
+                        # Обновляем URL если есть лучший вариант
                         api_url = goods.get('href') or goods.get('url')
                         if api_url:
                             product_url = api_url
+                        
+                        if self.debug:
+                            print(f"[get_product_meta] Из API корзины: title='{title}', category_id={category_id}")
                         break
         
-        # Якщо не вдалося отримати з API, пробуємо парсинг HTML
+        # Если не удалось получить из API, пробуем парсинг HTML
         if not title or not category_id:
             try:
-                resp = self.scraper.get(original_url)
+                if self.debug:
+                    print(f"[get_product_meta] Парсим HTML для получения недостающих данных")
+                
+                headers = self.base_headers.copy()
+                headers.update({
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Cache-Control': 'no-cache'
+                })
+                
+                resp = self.scraper.get(original_url, headers=headers, timeout=20)
                 html = resp.text
+                
+                if self.debug:
+                    print(f"[get_product_meta] HTML получен, размер: {len(html)} символов")
                 
                 if not title and _HAVE_BS4:
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Селектори для назви товару
+                    # Селекторы для названия товара
                     title_selectors = [
                         'h1.product__title',
                         'h1[data-testid="product-title"]',
                         '.product-title h1',
                         'h1.rz-product-title',
+                        'h1.goods-title',
                         'h1'
                     ]
                     
                     for selector in title_selectors:
-                        element = soup.select_one(selector)
-                        if element:
-                            title = element.get_text(strip=True)
-                            if title:
-                                break
+                        try:
+                            element = soup.select_one(selector)
+                            if element:
+                                title = element.get_text(strip=True)
+                                if title and len(title) > 3:
+                                    if self.debug:
+                                        print(f"[get_product_meta] Название найдено через '{selector}': '{title[:50]}...'")
+                                    break
+                        except Exception as e:
+                            if self.debug:
+                                print(f"[get_product_meta] Ошибка селектора названия '{selector}': {e}")
                 
-                # Якщо не знайшли category_id в API, шукаємо в URL
+                # Если не нашли category_id в API, ищем в URL
                 if not category_id:
-                    # Шукаємо в поточному URL
-                    match = re.search(r'/c(\d+)/', product_url)
-                    if not match:
-                        match = re.search(r'/c(\d+)/', original_url)
-                    if match:
-                        category_id = int(match.group(1))
-                
+                    # Ищем в текущем URL
+                    patterns = [
+                        r'/c(\d+)/',
+                        r'category[_-]?id[=:](\d+)',
+                        r'cat[_-]?id[=:](\d+)'
+                    ]
+                    
+                    for pattern in patterns:
+                        for url_to_check in [product_url, original_url]:
+                            match = re.search(pattern, url_to_check)
+                            if match:
+                                category_id = int(match.group(1))
+                                if self.debug:
+                                    print(f"[get_product_meta] category_id найден в URL: {category_id}")
+                                break
+                        if category_id:
+                            break
+                    
+                    # Если не найден в URL, ищем в HTML
+                    if not category_id:
+                        html_patterns = [
+                            r'"category[_-]?id"\s*:\s*(\d+)',
+                            r'"categoryId"\s*:\s*(\d+)',
+                            r'data-category[_-]?id\s*=\s*["\'](\d+)["\']'
+                        ]
+                        
+                        for pattern in html_patterns:
+                            match = re.search(pattern, html, re.I)
+                            if match:
+                                category_id = int(match.group(1))
+                                if self.debug:
+                                    print(f"[get_product_meta] category_id найден в HTML: {category_id}")
+                                break
+                    
             except Exception as e:
                 if self.debug:
-                    print(f"[get_product_meta] Помилка парсингу HTML: {e}")
+                    print(f"[get_product_meta] Ошибка парсинга HTML: {e}")
         
-        # Отримуємо назву категорії
+        # Получаем название категории ТОЛЬКО через HTML
         category_name = None
         if category_id is not None:
+            if self.debug:
+                print(f"[get_product_meta] Получаем название категории для ID: {category_id}")
+            
             category_name = self.parse_category_from_html(product_url, category_id)
             
+            if not category_name or category_name in ['Невідома категорія', 'Помилка отримання категорії']:
+                if self.debug:
+                    print(f"[get_product_meta] Пробуем альтернативный URL для получения категории")
+                
+                # Пробуем другие URL если есть
+                if product_url != original_url:
+                    category_name = self.parse_category_from_html(original_url, category_id)
+        
         if self.debug:
-            print(f"[get_product_meta] Результат: title='{title}', category='{category_name}', category_id={category_id}")
+            print(f"[get_product_meta] ИТОГОВЫЙ результат:")
+            print(f"  - title: '{title}'")
+            print(f"  - category_name: '{category_name}'") 
+            print(f"  - category_id: {category_id}")
             
         return title, category_name
-    def get_category_from_breadcrumbs(self, product_url, category_id):
-        """Отримання категорії з breadcrumbs для тега з rzrelnofollow і black-link"""
-        try:
-            resp = self.scraper.get(product_url, timeout=15)
-            html = resp.text
-            
-            if self.debug:
-                print(f"[breadcrumbs] Шукаємо категорію ID: {category_id}")
-            
-            if _HAVE_BS4:
-                soup = BeautifulSoup(html, 'html.parser')
-                link = soup.select_one('a[rzrelnofollow].black-link')
-                
-                if link:
-                    text_content = []
-                    for text_node in link.find_all(text=True):
-                        text = text_node.strip()
-                        if text and not text.startswith('icon-') and len(text) > 2:
-                            text_content.append(text)
-                    
-                    full_text = ' '.join(text_content).strip()
-                    full_text = re.sub(r'\s+', ' ', full_text)
-                    
-                    if full_text and len(full_text) > 2 and len(full_text) < 100:
-                        if self.debug:
-                            print(f"[breadcrumbs] Знайдено категорію: '{full_text}'")
-                        return full_text
-            
-            if self.debug:
-                print(f"[breadcrumbs] Категорію для ID {category_id} не знайдено")
-        
-        except Exception as e:
-            if self.debug:
-                print(f"[breadcrumbs] Помилка: {e}")
-        
-        return None
+
 
     def get_category_from_api(self, category_id):
         """Спроба отримати категорію через API Rozetka"""
@@ -496,29 +593,62 @@ class RozetkaStockChecker:
         return None
 
     def check_product(self, product_url):
+        """Основная функция проверки товара с улучшенной обработкой ошибок"""
+        # Сбрасываем состояние сессии
         self.reset_session_state()
         
         product_id = self.extract_product_id(product_url)
         if not product_id:
-            return {"error": "Не вдалося витягти ID", "url": product_url}
+            error_msg = "Не удалось извлечь ID товара из URL"
+            if self.debug:
+                print(f"[check_product] ОШИБКА: {error_msg}")
+            return {"error": error_msg, "url": product_url}
 
-        print(f"=== Перевіряємо товар ID {product_id}: {product_url}")
+        if self.debug:
+            print(f"[check_product] ===== НАЧАЛО ПРОВЕРКИ ТОВАРА =====")
+            print(f"[check_product] ID товара: {product_id}")
+            print(f"[check_product] URL: {product_url}")
         
+        print(f"=== Проверяем товар ID {product_id}: {product_url}")
+        
+        # Получаем максимальное количество товара
         max_stock, add_data = self.binary_search_max_stock(product_id)
         if max_stock is None:
-            return {"error": "Не вдалося визначити кількість", "url": product_url, "product_id": product_id}
+            error_msg = "Не удалось определить количество товара"
+            if self.debug:
+                print(f"[check_product] ОШИБКА: {error_msg}")
+            return {"error": error_msg, "url": product_url, "product_id": product_id}
 
-        title, category_name = self.get_product_meta(product_url, add_data, product_id)
+        if self.debug:
+            print(f"[check_product] Максимальное количество: {max_stock}")
+            print(f"[check_product] Получаем метаданные товара...")
+
+        # Получаем метаданные товара
+        try:
+            title, category_name = self.get_product_meta(product_url, add_data, product_id)
+        except Exception as e:
+            if self.debug:
+                print(f"[check_product] ОШИБКА получения метаданных: {e}")
+                import traceback
+                traceback.print_exc()
+            title, category_name = "Ошибка получения названия", "Ошибка получения категории"
         
+        # Формируем результат
         result = {
             "product_id": product_id,
             "url": product_url,
-            "title": title or '',
-            "category": category_name or '',
+            "title": title or 'Без названия',
+            "category": category_name or 'Без категории',
             "max_stock": max_stock,
         }
         
-        print(f"✅ Результат для товару {product_id}: {max_stock} шт. | {title or 'Без назви'}")
+        if self.debug:
+            print(f"[check_product] ===== РЕЗУЛЬТАТ =====")
+            for key, value in result.items():
+                print(f"[check_product] {key}: {value}")
+            print(f"[check_product] ===== КОНЕЦ ПРОВЕРКИ =====")
+        
+        print(f"✅ Результат для товара {product_id}: {max_stock} шт. | {title or 'Без названия'} | {category_name or 'Без категории'}")
         return result
 
 EXCEL_FILENAME = "rozetka_stock_history.xlsx"
