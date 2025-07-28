@@ -114,23 +114,58 @@ class DatabaseManager:
     def update_product_stock(self, product_id: int, stock_count: int):
         """Обновить остатки товара на текущую дату"""
         try:
+            logger.info(f"[DB] Начинаем обновление остатков: product_id={product_id}, stock_count={stock_count}")
+
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
+            # Проверяем, существует ли товар
+            cursor.execute("SELECT id, name FROM products WHERE id = ?", (product_id,))
+            product = cursor.fetchone()
+            if not product:
+                logger.error(f"[DB] Товар с ID {product_id} не найден в базе данных")
+                conn.close()
+                return False
+
+            logger.info(f"[DB] Товар найден: ID={product[0]}, Name='{product[1]}'")
+
             today = datetime.now().strftime('%Y-%m-%d')
-            
+            logger.info(f"[DB] Текущая дата: {today}")
+
+            # Проверяем, есть ли уже запись на сегодня
+            cursor.execute("SELECT stock_count FROM stock_history WHERE product_id = ? AND check_date = ?",
+                           (product_id, today))
+            existing = cursor.fetchone()
+
+            if existing:
+                logger.info(
+                    f"[DB] Найдена существующая запись на {today}: old_stock={existing[0]}, new_stock={stock_count}")
+            else:
+                logger.info(f"[DB] Новая запись на {today}: stock={stock_count}")
+
             # Добавляем или обновляем запись в истории
             cursor.execute("""
                 INSERT OR REPLACE INTO stock_history (product_id, check_date, stock_count) 
                 VALUES (?, ?, ?)
             """, (product_id, today, stock_count))
-            
+
+            affected_rows = cursor.rowcount
+            logger.info(f"[DB] Затронуто строк: {affected_rows}")
+
             conn.commit()
             conn.close()
-            logger.info(f"Обновлены остатки для товара {product_id}: {stock_count}")
+
+            logger.info(f"[DB] ✅ УСПЕШНО обновлены остатки для товара {product_id}: {stock_count}")
             return True
+
         except Exception as e:
-            logger.error(f"Ошибка обновления остатков: {e}")
+            logger.error(f"[DB] ❌ ОШИБКА обновления остатков для товара {product_id}: {e}")
+            import traceback
+            logger.error(f"[DB] Полный traceback: {traceback.format_exc()}")
+            try:
+                conn.close()
+            except:
+                pass
             return False
 
     def get_products(self) -> List[Dict]:
@@ -750,29 +785,46 @@ class RozetkaTelegramBot:
         products = self.db.get_products()
         results = []
 
+        logger.info(f"=== НАЧАЛО АВТОМАТИЧЕСКОЙ ПРОВЕРКИ ===")
+        logger.info(f"Режим manual: {manual}")
+        logger.info(f"Всего товаров для проверки: {len(products)}")
+
         for i, product in enumerate(products, 1):
             try:
-                logger.info(f"Перевіряю товар {i}/{len(products)}: {product['name']}")
+                logger.info(f">>> Товар {i}/{len(products)}: {product['name']} (ID: {product['id']})")
 
                 result = self.checker.check_product(product['url'])
                 if 'error' not in result:
                     # Оновлюємо інформацію про товар
                     updated_name = result.get('title', product['name'])
                     updated_category = result.get('category', product['category'])
+                    stock_count = result.get('max_stock', 0)
+
+                    logger.info(
+                        f"    Получен результат: name='{updated_name}', category='{updated_category}', stock={stock_count}")
 
                     if updated_name != product['name'] or updated_category != product['category']:
+                        logger.info(f"    Обновляем информацию о товаре...")
                         self.db.add_product(
                             product['url'],
                             updated_name,
                             updated_category
                         )
 
-                    # ИСПРАВЛЕНИЕ: Обновляем залишки для всех проверок (не только manual)
-                    stock_count = result.get('max_stock', 0)
-                    product_id = self.db.get_product_id_by_url(product['url'])
-                    if product_id:
-                        self.db.update_product_stock(product_id, stock_count)
-                        logger.info(f"Обновлены остатки для товара {product_id}: {stock_count}")
+                    # Оновлюємо залишки тільки для автоматичних перевірок
+                    if not manual:
+                        logger.info(f"    СОХРАНЯЕМ ОСТАТКИ для товара ID {product['id']}: {stock_count}")
+                        try:
+                            success = self.db.update_product_stock(product['id'], stock_count)
+                            if success:
+                                logger.info(f"    ✅ УСПЕШНО сохранены остатки для товара {product['id']}")
+                            else:
+                                logger.error(f"    ❌ ОШИБКА сохранения остатков для товара {product['id']}")
+                        except Exception as stock_error:
+                            logger.error(
+                                f"    ❌ ИСКЛЮЧЕНИЕ при сохранении остатков товара {product['id']}: {stock_error}")
+                    else:
+                        logger.info(f"    Пропускаем сохранение остатков (manual=True)")
 
                     results.append({
                         'name': updated_name or 'Без назви',
@@ -780,26 +832,38 @@ class RozetkaTelegramBot:
                         'stock': stock_count
                     })
 
-                    logger.info(f"Успіх: {updated_name}, залишки: {stock_count}")
+                    logger.info(f"    ✅ Товар {i} обработан успешно")
                 else:
+                    logger.error(f"    ❌ Ошибка проверки товара {i}: {result['error']}")
                     results.append({
                         'name': product['name'],
                         'success': False,
                         'error': result['error']
                     })
-                    logger.error(f"Помилка для товару {product['url']}: {result['error']}")
 
             except Exception as e:
-                logger.error(f"Критична помилка перевірки товару {product['url']}: {e}")
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА для товара {i} ({product.get('name', 'Unknown')}): {e}")
+                logger.error(f"   URL: {product.get('url', 'Unknown')}")
+                import traceback
+                logger.error(f"   Traceback: {traceback.format_exc()}")
+
                 results.append({
-                    'name': product['name'],
+                    'name': product.get('name', 'Unknown'),
                     'success': False,
                     'error': str(e)
                 })
 
+                # НЕ ПРЕРЫВАЕМ цикл, продолжаем со следующим товаром
+
             # Пауза між товарами
             if i < len(products):
+                logger.info(f"    Пауза перед следующим товаром...")
                 await asyncio.sleep(2)
+
+        logger.info(f"=== КОНЕЦ АВТОМАТИЧЕСКОЙ ПРОВЕРКИ ===")
+        logger.info(f"Обработано товаров: {len(results)}")
+        success_count = sum(1 for r in results if r.get('success', False))
+        logger.info(f"Успешно: {success_count}, Ошибок: {len(results) - success_count}")
 
         return results
 
