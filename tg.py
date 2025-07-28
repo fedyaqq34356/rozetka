@@ -324,12 +324,14 @@ class RozetkaStockChecker:
                 # Шукаємо у breadcrumbs (найбільш надійно)
                 breadcrumb_selectors = [
                     '.breadcrumbs a',
-                    '.rz-breadcrumbs a', 
+                    '.rz-breadcrumbs a',
                     '[data-testid="breadcrumbs"] a',
                     '.catalog-heading a',
                     '.breadcrumb a',
                     'nav a',
-                    '.rz-catalog-breadcrumbs a'
+                    '.rz-catalog-breadcrumbs a',
+                    'a[rzrelnofollow].black-link',  # Добавлен селектор для Angular-компонентов
+                    'a[href*="/c"]'
                 ]
                 
                 for selector in breadcrumb_selectors:
@@ -542,14 +544,12 @@ class RozetkaStockChecker:
                 breadcrumb_selectors = [
                     '.breadcrumbs a',
                     '.rz-breadcrumbs a',
-                    '[data-testid="breadcrumbs"] a', 
+                    '[data-testid="breadcrumbs"] a',
                     '.catalog-heading a',
                     '.breadcrumb a',
                     'nav a',
                     '.rz-catalog-breadcrumbs a',
-                    # Додаємо селектори для Angular компонентів
-                    'a[rzrelnofollow]',
-                    'a.black-link',
+                    'a[rzrelnofollow].black-link',  # Добавлен селектор для Angular-компонентов
                     'a[href*="/c"]'
                 ]
                 
