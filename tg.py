@@ -258,35 +258,33 @@ class RozetkaStockChecker:
         return max_available, add_data
 
     def parse_category_from_html(self, product_url, category_id):
-        """Покращена функція парсингу категорії з більш точними селекторами"""
+        """Простая функция парсинга категории с приоритетом на селектор a[rzrelnofollow].black-link"""
         try:
+            # Завантажуємо HTML сторінки
             resp = self.scraper.get(product_url, timeout=15)
+            resp.raise_for_status()
             html = resp.text
-            
+
             if self.debug:
                 print(f"[parse_category] Шукаємо категорію ID: {category_id}")
-            
-            json_patterns = [
-                rf'"name"\s*:\s*"([^"]*)"[^}}]*"@id"\s*:\s*"[^"]*/{category_id}/',
-                rf'"@id"\s*:\s*"[^"]*/{category_id}/[^"]*"[^}}]*"name"\s*:\s*"([^"]*)"',
-                rf'"categoryId"\s*:\s*{category_id}[^}}]*"name"\s*:\s*"([^"]*)"',
-                rf'"id"\s*:\s*{category_id}[^}}]*"title"\s*:\s*"([^"]*)"'
-            ]
-            
-            for pattern in json_patterns:
-                matches = re.finditer(pattern, html, re.I | re.S)
-                for match in matches:
-                    category_name = match.group(1).strip()
-                    if category_name and len(category_name) > 2 and len(category_name) < 100:
-                        if self.debug:
-                            print(f"[parse_category] Знайдено в JSON: '{category_name}'")
-                        return category_name
-            
+
+            # Парсинг через BeautifulSoup с приоритетом на a[rzrelnofollow].black-link
             if _HAVE_BS4:
                 soup = BeautifulSoup(html, 'html.parser')
                 
+                # Прямой поиск нужного селектора
+                link = soup.select_one('a[rzrelnofollow].black-link')
+                if link:
+                    text = link.get_text(strip=True)
+                    if text and 2 < len(text) < 100 and not any(
+                        skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
+                    ):
+                        if self.debug:
+                            print(f"[parse_category] Знайдено в a[rzrelnofollow].black-link: '{text}'")
+                        return text
+
+                # Резервные селекторы для breadcrumbs
                 breadcrumb_selectors = [
-                    'a[rzrelnofollow].black-link',
                     '.breadcrumbs a',
                     '.rz-breadcrumbs a',
                     '[data-testid="breadcrumbs"] a',
@@ -294,9 +292,10 @@ class RozetkaStockChecker:
                     '.breadcrumb a',
                     'nav a',
                     '.rz-catalog-breadcrumbs a',
-                    'a[href*="/c"]'
+                    f'a[href*="/c{category_id}/"]',
+                    f'a[href*="/ua/c{category_id}/"]'
                 ]
-                
+
                 for selector in breadcrumb_selectors:
                     try:
                         elements = soup.select(selector)
@@ -304,69 +303,57 @@ class RozetkaStockChecker:
                             href = element.get('href', '')
                             if re.search(rf'/c{category_id}(?:/|$)', href):
                                 text = element.get_text(strip=True)
-                                if text and len(text) > 2 and len(text) < 100:
-                                    if not any(skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']):
-                                        if self.debug:
-                                            print(f"[parse_category] Знайдено в breadcrumbs: '{text}'")
-                                        return text
+                                if text and 2 < len(text) < 100 and not any(
+                                    skip in text.lower() for skip in ['>', '<', 'img', 'svg', 'icon', 'span']
+                                ):
+                                    if self.debug:
+                                        print(f"[parse_category] Знайдено в breadcrumbs селекторі '{selector}': '{text}'")
+                                    return text
                     except Exception as e:
                         if self.debug:
                             print(f"[parse_category] Помилка breadcrumb селектора {selector}: {e}")
                         continue
-                
-                category_selectors = [
-                    f'a[href*="/c{category_id}/"]',
-                    f'a[href*="/ua/c{category_id}/"]',
-                    f'*[data-category-id="{category_id}"]',
-                    f'*[data-id="{category_id}"]'
-                ]
-                
-                for selector in category_selectors:
-                    try:
-                        elements = soup.select(selector)
-                        for element in elements:
-                            text = element.get_text(strip=True)
-                            if text and len(text) > 2 and len(text) < 100:
-                                if not any(skip in text.lower() for skip in ['>', '<', 'function', 'script', 'style']):
-                                    if self.debug:
-                                        print(f"[parse_category] Знайдено за селектором '{selector}': '{text}'")
-                                    return text
-                    except Exception as e:
-                        if self.debug:
-                            print(f"[parse_category] Помилка селектора {selector}: {e}")
-                        continue
-            
+
+            # Резервный поиск через regex
             regex_patterns = [
                 rf'<a[^>]+href="[^"]*/?c{category_id}/[^"]*"[^>]*>([^<]+)</a>',
                 rf'<a[^>]+href="[^"]*c{category_id}[^"]*"[^>]*>([^<]*?)</a>',
                 rf'"name"\s*:\s*"([^"]*)"[^}}]*"categoryId"\s*:\s*"?{category_id}"?',
                 rf'"title"\s*:\s*"([^"]*)"[^}}]*"id"\s*:\s*"?{category_id}"?'
             ]
-            
+
             for pattern in regex_patterns:
                 try:
                     matches = re.finditer(pattern, html, re.I | re.S)
                     for match in matches:
                         text = re.sub(r'<[^>]+>', '', match.group(1)).strip()
                         text = re.sub(r'\s+', ' ', text)
-                        if text and len(text) > 2 and len(text) < 100:
-                            if not any(skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']):
-                                if self.debug:
-                                    print(f"[parse_category] Знайдено regex: '{text}'")
-                                return text
+                        if text and 2 < len(text) < 100 and not any(
+                            skip in text.lower() for skip in ['function', 'script', 'style', '{', '}']
+                        ):
+                            if self.debug:
+                                print(f"[parse_category] Знайдено regex: '{text}'")
+                            return text
                 except Exception as e:
                     if self.debug:
                         print(f"[parse_category] Помилка pattern: {e}")
                     continue
-            
+
+            # Резервный вызов API
+            category_name = self.get_category_from_api(category_id)
+            if category_name:
+                if self.debug:
+                    print(f"[parse_category] Знайдено через API: '{category_name}'")
+                return category_name
+
             if self.debug:
                 print(f"[parse_category] Категорію з ID {category_id} не знайдено")
-                
+
+            return None
         except Exception as e:
             if self.debug:
                 print(f"[parse_category] Загальна помилка: {e}")
-        
-        return None
+            return None
 
     def get_product_meta(self, product_url, add_data, product_id):
         """ВИПРАВЛЕНА функція отримання метаданих товару"""
